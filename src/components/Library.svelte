@@ -9,6 +9,7 @@
     type Book,
   } from '$stores/books';
   import { loadEPUBFile } from '$lib/epub-loader';
+  import Discover from './Discover.svelte';
 
   let isLoading = $state(false);
   let error = $state('');
@@ -75,7 +76,7 @@
   {#if $books.length === 0}
     <p class="empty">
       the shelf is empty.<br />
-      add an <em>.epub</em> to begin.
+      add an <em>.epub</em> — or pick one from below.
     </p>
   {:else}
     <ul class="shelf">
@@ -95,6 +96,8 @@
       {/each}
     </ul>
   {/if}
+
+  <Discover />
 
   <footer>
     <p>— kathai —</p>

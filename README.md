@@ -64,6 +64,16 @@ Get a book on screen and keep it there across reloads.
 
 **Definition of done:** upload an EPUB → it appears on the shelf → open it → read chapters → refresh → it's still there, at the chapter you left.
 
+### Phase 2.1 — Discover (Project Gutenberg)
+Remove the blank-shelf blocker. 75,000 free books, one tap away.
+
+- [x] Gutendex-backed search (`src/lib/gutenberg.ts`) — no API key, CORS-friendly
+- [x] `Discover` component — italic search field, popular-first on open, dashed-rule results
+- [x] Direct EPUB fetch from Gutenberg mirrors, parsed in-browser, saved to the shelf
+- [x] `gutenberg-<id>` deterministic IDs (re-importing the same book is a no-op)
+- [ ] Language filter / subject facets
+- [ ] Offline-friendly "recently browsed" cache
+
 ### Phase 2 — Narration
 Make the book read itself.
 
@@ -142,7 +152,8 @@ src/
 ├── components/
 │   ├── Library.svelte      # shelf: upload, list, delete
 │   ├── Reader.svelte       # chapter view + navigation + active-sentence highlight
-│   └── Player.svelte       # narration controls (play/pause/prev/next/rate)
+│   ├── Player.svelte       # narration controls (play/pause/prev/next/rate)
+│   └── Discover.svelte     # Project Gutenberg search & import
 ├── stores/
 │   ├── books.ts            # library + current-book state, progress persistence
 │   └── player.ts           # narration state machine (idle/playing/paused)
@@ -150,7 +161,8 @@ src/
 │   ├── db.ts               # IndexedDB helpers
 │   ├── epub-loader.ts      # epub.js wrapper → { metadata, chapters }
 │   ├── text-chunker.ts     # sentence-aware chunking (feeds the player)
-│   └── tts.ts              # TTSEngine interface + WebSpeechEngine impl
+│   ├── tts.ts              # TTSEngine interface + WebSpeechEngine impl
+│   └── gutenberg.ts        # Gutendex search + direct EPUB download
 ├── styles/
 │   └── global.css          # paper/ink design tokens
 ├── App.svelte              # shelf ↔ reader routing
@@ -159,4 +171,4 @@ src/
 
 ## Progress
 
-**Current status:** Phase 1 ✓, Phase 2 ✓ (Web Speech backend — narration, active-sentence highlight, speed control). Phase 2.5 (KittenTTS ONNX engine) and Phase 3 (PWA / offline) up next.
+**Current status:** Phase 1 ✓, Phase 2 ✓ (Web Speech narration + active-sentence highlight), Phase 2.1 ✓ (Project Gutenberg discovery — 75k books, one tap to import). Phase 2.5 (KittenTTS ONNX engine) and Phase 3 (PWA / offline) up next.
