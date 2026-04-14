@@ -1,9 +1,33 @@
 <script lang="ts">
   import { currentBook, currentChapterIndex, saveProgress } from '$stores/books';
-  import { extractPlainText } from '$lib/epub-loader';
+  import { extractPlainText, type Chapter } from '$lib/epub-loader';
   import { chunkBySentences } from '$lib/text-chunker';
   import { playerState, startPlaying, stopPlaying } from '$stores/player';
   import Player from './Player.svelte';
+
+  const MIN_CHAPTER_LENGTH = 50;
+
+  function chapterText(ch: Chapter): string {
+    // Books loaded before plainText was pre-extracted may not have it stored.
+    return ch.plainText ?? extractPlainText(ch.htmlContent);
+  }
+
+  /**
+   * Produce the effective chapter list — the one the user navigates through.
+   * Books already saved in IndexedDB from earlier builds have empty-ish
+   * sections (cover, title page) in their `chapters` array; we drop those
+   * here at display time so Next/Prev skip over them.
+   */
+  let effectiveChapters = $derived.by<Chapter[]>(() => {
+    const book = $currentBook;
+    if (!book) return [];
+    const withText = book.chapters.map((ch) => ({
+      ...ch,
+      plainText: chapterText(ch),
+    }));
+    const filtered = withText.filter((ch) => ch.plainText.length >= MIN_CHAPTER_LENGTH);
+    return filtered.length > 0 ? filtered : withText;
+  });
 
   let plainText = $state('');
   let sentences = $state<string[]>([]);
@@ -11,21 +35,18 @@
   let sentenceEls = $state<(HTMLSpanElement | null)[]>([]);
 
   function playCurrentChapter() {
-    const book = $currentBook;
+    const chapters = effectiveChapters;
     const idx = $currentChapterIndex;
-    if (!book || !book.chapters[idx]) return;
-    const text = extractPlainText(book.chapters[idx].htmlContent);
+    const chapter = chapters[idx];
+    if (!chapter) return;
     autoAdvance = true;
-    startPlaying(text, () => {
+    startPlaying(chapter.plainText, () => {
       // Fires when the chapter finishes naturally. If another chapter
       // exists and auto-advance is still armed, roll forward and keep going.
       if (!autoAdvance) return;
-      const b = $currentBook;
-      if (!b) return;
       const next = $currentChapterIndex + 1;
-      if (next < b.chapters.length) {
+      if (next < effectiveChapters.length) {
         currentChapterIndex.set(next);
-        // The chapter-change effect below will re-trigger playback.
         queueMicrotask(() => playCurrentChapter());
       } else {
         autoAdvance = false;
@@ -33,14 +54,24 @@
     });
   }
 
+  // Clamp the saved index if the effective chapter list is shorter than
+  // whatever index got persisted from an earlier build.
   $effect(() => {
-    const book = $currentBook;
+    const len = effectiveChapters.length;
+    if (len > 0 && $currentChapterIndex >= len) {
+      currentChapterIndex.set(0);
+    }
+  });
+
+  $effect(() => {
+    const chapters = effectiveChapters;
     const idx = $currentChapterIndex;
-    if (book && idx >= 0 && book.chapters[idx]) {
-      plainText = extractPlainText(book.chapters[idx].htmlContent);
+    const book = $currentBook;
+    if (chapters.length > 0 && idx >= 0 && chapters[idx]) {
+      plainText = chapters[idx].plainText;
       sentences = chunkBySentences(plainText, 40);
       sentenceEls = new Array(sentences.length).fill(null);
-      saveProgress(book.id, idx).catch(console.error);
+      if (book) saveProgress(book.id, idx).catch(console.error);
     } else {
       plainText = '';
       sentences = [];
@@ -58,8 +89,7 @@
   });
 
   function nextChapter() {
-    const book = $currentBook;
-    if (book && $currentChapterIndex < book.chapters.length - 1) {
+    if ($currentChapterIndex < effectiveChapters.length - 1) {
       autoAdvance = false;
       stopPlaying();
       currentChapterIndex.set($currentChapterIndex + 1);
@@ -93,7 +123,7 @@
 {#if $currentBook}
   {@const book = $currentBook}
   {@const idx = $currentChapterIndex}
-  {@const chapter = book.chapters[idx]}
+  {@const chapter = effectiveChapters[idx]}
   <div class="page">
     <header>
       <button class="back" onclick={back}>← shelf</button>
@@ -133,8 +163,8 @@
 
     <footer>
       <button onclick={prevChapter} disabled={idx === 0}>← prev</button>
-      <span class="folio">{idx + 1} / {book.chapters.length}</span>
-      <button onclick={nextChapter} disabled={idx >= book.chapters.length - 1}>
+      <span class="folio">{idx + 1} / {effectiveChapters.length}</span>
+      <button onclick={nextChapter} disabled={idx >= effectiveChapters.length - 1}>
         next →
       </button>
     </footer>
