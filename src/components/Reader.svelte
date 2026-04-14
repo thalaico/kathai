@@ -15,7 +15,7 @@
   import Player from './Player.svelte';
 
   // ─────────────────────────────────────────────────────────────
-  // Effective chapter list (with runtime re-split for old caches)
+  // Chapter resolution (with runtime re-split for old cached books)
   // ─────────────────────────────────────────────────────────────
 
   let effectiveChapters = $derived.by<Chapter[]>(() => {
@@ -64,25 +64,47 @@
   );
 
   // ─────────────────────────────────────────────────────────────
-  // Pagination via CSS multicol + JS-measured transform
+  // Pagination: vertical translate, line-height-aligned.
+  //
+  // The text flows normally in a single column inside a fixed-height
+  // container with overflow:hidden. A "page" is an integer number of
+  // line-heights that fits in the container height — we translate the
+  // article by -currentPage * pageHeight to show the next page. Line
+  // alignment means text is never cut mid-row.
   // ─────────────────────────────────────────────────────────────
 
   let pagesContainer = $state<HTMLDivElement | null>(null);
   let articleEl = $state<HTMLElement | null>(null);
-  let containerWidth = $state(0);
+  let sentenceEls = $state<(HTMLSpanElement | null)[]>([]);
+  let pageHeight = $state(0);
   let totalPages = $state(1);
   let currentPage = $state(0);
-  /** Set to 'last' when a chapter change should land on the final page. */
+  /** Used so chapter changes driven by "prev from page 0" land on the last page. */
   let pendingPageTarget: 'first' | 'last' = 'first';
 
   async function measure() {
     if (!pagesContainer || !articleEl) return;
     await tick();
-    const cw = pagesContainer.clientWidth;
-    if (cw === 0) return;
-    containerWidth = cw;
-    const sw = articleEl.scrollWidth;
-    totalPages = Math.max(1, Math.round(sw / cw));
+    // One more RAF so browser layout catches up with the Svelte update.
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+    const ch = pagesContainer.clientHeight;
+    if (ch === 0) return;
+
+    const computed = getComputedStyle(articleEl);
+    const rawLineHeight = parseFloat(computed.lineHeight);
+    const lineHeight = Number.isFinite(rawLineHeight) && rawLineHeight > 0
+      ? rawLineHeight
+      : parseFloat(computed.fontSize) * 1.75;
+
+    // Largest integer number of lines that fits in the container height.
+    const lines = Math.max(1, Math.floor(ch / lineHeight));
+    const newPageHeight = lines * lineHeight;
+    pageHeight = newPageHeight;
+
+    const contentHeight = articleEl.scrollHeight;
+    totalPages = Math.max(1, Math.ceil(contentHeight / newPageHeight));
+
     if (pendingPageTarget === 'last') {
       currentPage = totalPages - 1;
       pendingPageTarget = 'first';
@@ -91,11 +113,9 @@
     }
   }
 
-  // Remeasure whenever the sentences (and therefore the laid-out text) change.
+  // Re-measure whenever the rendered text changes.
   $effect(() => {
-    // Read the reactive deps so the effect fires on chapter changes.
     void sentences;
-    void containerWidth;
     measure();
   });
 
@@ -105,13 +125,11 @@
     return () => ro.disconnect();
   });
 
-  // Save reading progress as the chapter changes.
+  // Save reading progress as chapters change.
   $effect(() => {
     const book = $currentBook;
     const idx = $currentChapterIndex;
-    if (book && idx >= 0) {
-      saveProgress(book.id, idx).catch(console.error);
-    }
+    if (book && idx >= 0) saveProgress(book.id, idx).catch(console.error);
   });
 
   // Clamp if persisted index overruns the (possibly re-split) chapter list.
@@ -121,7 +139,7 @@
   });
 
   // ─────────────────────────────────────────────────────────────
-  // Navigation: page-first, with auto chapter advance at the edges
+  // Navigation: pages first, auto-advance chapters at the edges.
   // ─────────────────────────────────────────────────────────────
 
   function nextPage() {
@@ -157,7 +175,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────
-  // TTS wiring
+  // TTS wiring — narration auto-flips pages to follow the reader.
   // ─────────────────────────────────────────────────────────────
 
   let autoAdvance = $state(false);
@@ -188,7 +206,20 @@
     }
   }
 
-  // Keyboard navigation: ←/→ flip pages.
+  // Follow the narration: whenever the current chunk changes, jump to
+  // the page containing its sentence span so the highlight is visible.
+  $effect(() => {
+    const status = $playerState.status;
+    const chunkIdx = $playerState.currentChunk;
+    if (status === 'idle') return;
+    if (pageHeight === 0) return;
+    const el = sentenceEls[chunkIdx];
+    if (!el) return;
+    const target = Math.max(0, Math.min(totalPages - 1, Math.floor(el.offsetTop / pageHeight)));
+    if (target !== currentPage) currentPage = target;
+  });
+
+  // Keyboard navigation: ← / → / space flip pages.
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'ArrowRight' || e.key === ' ') {
       e.preventDefault();
@@ -228,16 +259,16 @@
     <div class="pages" bind:this={pagesContainer}>
       <article
         bind:this={articleEl}
-        style:transform={`translateX(-${currentPage * 100}%)`}
+        style:transform={`translateY(-${currentPage * pageHeight}px)`}
       >
         {#each sentences as sentence, i (i)}
           <span
             class="sentence"
             class:active={$playerState.status !== 'idle' && $playerState.currentChunk === i}
+            bind:this={sentenceEls[i]}
           >{sentence}</span>{' '}
         {/each}
       </article>
-      <!-- tap zones — left half prev, right half next -->
       <button class="zone left" onclick={prevPage} aria-label="previous page"></button>
       <button class="zone right" onclick={nextPage} aria-label="next page"></button>
     </div>
@@ -348,9 +379,8 @@
     letter-spacing: 0.08em;
   }
 
-  /* The pagination surface. Fixed-height, multicol article inside, columns
-     slide via translateX. min-height:0 is critical so the flex child can
-     actually shrink to give the multicol element a concrete height. */
+  /* Fixed-height window into continuously-flowing text. Article grows
+     with its content; translateY slides it up by one page at a time. */
   .pages {
     position: relative;
     flex: 1 1 auto;
@@ -359,10 +389,6 @@
   }
 
   .pages article {
-    height: 100%;
-    column-width: 100%;
-    column-gap: 0;
-    column-fill: auto;
     font-size: 1.05rem;
     line-height: 1.75;
     text-align: justify;
@@ -382,7 +408,7 @@
     box-shadow: 0 0 0 3px var(--paper-edge);
   }
 
-  /* Invisible tap zones over the page for touch navigation. */
+  /* Tap zones over the page. Left 30% = prev, right 30% = next. */
   .zone {
     position: absolute;
     top: 0;
