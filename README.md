@@ -84,8 +84,9 @@ Make the book read itself.
 - [x] Active-sentence highlight in the reader (paper-edge wash)
 - [x] Chapter-change cancels narration
 - [x] Speed control (0.75× / 1× / 1.25× / 1.5×)
+- [x] Auto-advance to next chapter when current finishes
+- [x] Auto-scroll the active sentence into view
 - [ ] Voice picker (expose `listVoices()` in settings)
-- [ ] Auto-advance to next chapter when current finishes
 - [ ] *Phase 2.5 — KittenTTS ONNX engine behind the same interface*
   - [ ] Model download + IndexedDB cache
   - [ ] `synthesizer.worker.ts` — ONNX inference off main thread
@@ -98,12 +99,14 @@ Make the book read itself.
 ### Phase 3 — Polish & offline
 Make it installable and genuinely portable.
 
-- [ ] `manifest.json` + icons
-- [ ] Service Worker: cache app shell, EPUBs, TTS model
-- [ ] PWA install prompt on supported platforms
+- [x] `manifest.webmanifest` + SVG icon (paper/ink aesthetic, maskable)
+- [x] Service Worker via `vite-plugin-pwa` (Workbox) — app shell precache
+- [x] Runtime caching: Gutendex `StaleWhileRevalidate`, Gutenberg EPUBs `CacheFirst`
+- [x] iOS `apple-mobile-web-app-capable` + theme-color (light/dark)
 - [ ] Settings panel (theme, voice, speed, font size, justification on/off)
 - [ ] Persistent storage permission request
 - [ ] Storage quota indicator
+- [ ] Install-prompt UX (soft affordance, not a banner)
 - [ ] Performance pass: code-split Player, lazy chapter parsing
 - [ ] Real-device testing: iPhone 12+, Pixel 5+
 - [ ] Accessibility pass: keyboard nav, screen reader labels, focus states
@@ -171,4 +174,4 @@ src/
 
 ## Progress
 
-**Current status:** Phase 1 ✓, Phase 2 ✓ (Web Speech narration + active-sentence highlight), Phase 2.1 ✓ (Project Gutenberg discovery — 75k books, one tap to import). Phase 2.5 (KittenTTS ONNX engine) and Phase 3 (PWA / offline) up next.
+**Current status:** Phases 1, 2, 2.1, and 3 core all shipped. Today kathai is: a mobile-first, installable PWA that can upload EPUBs or pull any of Project Gutenberg's 75k free books, read them aloud via the OS's native TTS with auto-advance between chapters and active-sentence tracking, and keep working offline after first load. Remaining: Phase 2.5 (KittenTTS ONNX engine for higher-quality voices) and Phase 3 polish (Settings panel, real-device testing, a11y pass).

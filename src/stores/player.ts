@@ -22,6 +22,7 @@ const initial: PlayerState = {
 export const playerState = writable<PlayerState>({ ...initial });
 
 let abortCtrl: AbortController | null = null;
+let onFinishedCb: (() => void) | null = null;
 
 async function runLoop(startIdx: number) {
   const engine = getTTSEngine();
@@ -38,7 +39,11 @@ async function runLoop(startIdx: number) {
       const { chunks, rate, voiceId } = get(playerState);
       await engine.speak(chunks[i], { rate, voiceId, signal });
     }
+    // Reached the end naturally. Fire the hook before resetting state so
+    // the callback can call startPlaying() for the next chapter without racing.
+    const cb = onFinishedCb;
     playerState.update((s) => ({ ...s, status: 'idle' }));
+    cb?.();
   } catch (err) {
     if ((err as DOMException)?.name !== 'AbortError') {
       console.error('TTS error:', err);
@@ -47,9 +52,13 @@ async function runLoop(startIdx: number) {
   }
 }
 
-export function startPlaying(text: string) {
+export function startPlaying(text: string, onFinished?: () => void) {
   const chunks = chunkBySentences(text, 40);
-  if (chunks.length === 0) return;
+  if (chunks.length === 0) {
+    onFinished?.();
+    return;
+  }
+  onFinishedCb = onFinished ?? null;
   playerState.update((s) => ({ ...s, chunks, currentChunk: 0 }));
   runLoop(0);
 }
@@ -57,6 +66,7 @@ export function startPlaying(text: string) {
 export function stopPlaying() {
   abortCtrl?.abort();
   abortCtrl = null;
+  onFinishedCb = null;
   getTTSEngine().cancel();
   playerState.set({ ...initial, rate: get(playerState).rate, voiceId: get(playerState).voiceId });
 }

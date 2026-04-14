@@ -7,6 +7,31 @@
 
   let plainText = $state('');
   let sentences = $state<string[]>([]);
+  let autoAdvance = $state(false);
+  let sentenceEls = $state<(HTMLSpanElement | null)[]>([]);
+
+  function playCurrentChapter() {
+    const book = $currentBook;
+    const idx = $currentChapterIndex;
+    if (!book || !book.chapters[idx]) return;
+    const text = extractPlainText(book.chapters[idx].htmlContent);
+    autoAdvance = true;
+    startPlaying(text, () => {
+      // Fires when the chapter finishes naturally. If another chapter
+      // exists and auto-advance is still armed, roll forward and keep going.
+      if (!autoAdvance) return;
+      const b = $currentBook;
+      if (!b) return;
+      const next = $currentChapterIndex + 1;
+      if (next < b.chapters.length) {
+        currentChapterIndex.set(next);
+        // The chapter-change effect below will re-trigger playback.
+        queueMicrotask(() => playCurrentChapter());
+      } else {
+        autoAdvance = false;
+      }
+    });
+  }
 
   $effect(() => {
     const book = $currentBook;
@@ -14,38 +39,53 @@
     if (book && idx >= 0 && book.chapters[idx]) {
       plainText = extractPlainText(book.chapters[idx].htmlContent);
       sentences = chunkBySentences(plainText, 40);
+      sentenceEls = new Array(sentences.length).fill(null);
       saveProgress(book.id, idx).catch(console.error);
     } else {
       plainText = '';
       sentences = [];
+      sentenceEls = [];
     }
-    // Stop narration when chapter changes.
-    stopPlaying();
+  });
+
+  // Scroll the active sentence into view while narrating.
+  $effect(() => {
+    if ($playerState.status === 'idle') return;
+    const el = sentenceEls[$playerState.currentChunk];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   });
 
   function nextChapter() {
     const book = $currentBook;
     if (book && $currentChapterIndex < book.chapters.length - 1) {
+      autoAdvance = false;
+      stopPlaying();
       currentChapterIndex.set($currentChapterIndex + 1);
     }
   }
 
   function prevChapter() {
     if ($currentChapterIndex > 0) {
+      autoAdvance = false;
+      stopPlaying();
       currentChapterIndex.set($currentChapterIndex - 1);
     }
   }
 
   function back() {
+    autoAdvance = false;
     stopPlaying();
     currentBook.set(null);
   }
 
   function listen() {
     if ($playerState.chunks.length > 0) {
+      autoAdvance = false;
       stopPlaying();
     } else {
-      startPlaying(plainText);
+      playCurrentChapter();
     }
   }
 </script>
@@ -79,6 +119,7 @@
         <span
           class="sentence"
           class:active={$playerState.status !== 'idle' && $playerState.currentChunk === i}
+          bind:this={sentenceEls[i]}
         >
           {sentence}
         </span>
