@@ -67,15 +67,21 @@ Get a book on screen and keep it there across reloads.
 ### Phase 2 — Narration
 Make the book read itself.
 
-- [ ] KittenTTS model download + IndexedDB cache
-- [ ] `synthesizer.worker.ts` — ONNX inference off main thread
-- [ ] `tts-worker.ts` — request/response wrapper with transferables
-- [ ] Prefetch queue: synthesize next 2 chunks while current plays
-- [ ] `Player` component — play/pause, seek within chunk, speed (0.75–1.5×)
-- [ ] Web Audio API playback with playbackRate
-- [ ] Voice selection (2 default voices)
-- [ ] Highlight currently-speaking sentence in the reader (if cheap)
-- [ ] Graceful fallback to `SpeechSynthesis` API if ONNX fails
+- [x] `TTSEngine` interface (`src/lib/tts.ts`) — pluggable engine backend
+- [x] `WebSpeechEngine` — ships first, uses the OS's native on-device TTS
+- [x] `player` store — play / pause / stop / prev / next / rate
+- [x] `Player` component — minimal italic controls under the chapter
+- [x] Active-sentence highlight in the reader (paper-edge wash)
+- [x] Chapter-change cancels narration
+- [x] Speed control (0.75× / 1× / 1.25× / 1.5×)
+- [ ] Voice picker (expose `listVoices()` in settings)
+- [ ] Auto-advance to next chapter when current finishes
+- [ ] *Phase 2.5 — KittenTTS ONNX engine behind the same interface*
+  - [ ] Model download + IndexedDB cache
+  - [ ] `synthesizer.worker.ts` — ONNX inference off main thread
+  - [ ] Prefetch queue: synthesize next 2 chunks while current plays
+  - [ ] Web Audio API playback
+  - [ ] Transparent fallback to `WebSpeechEngine` if ONNX fails
 
 **Definition of done:** tap *listen* → the chapter starts playing within ~1s → pause/resume works → speed control works → switching chapters restarts narration.
 
@@ -135,13 +141,16 @@ bun run preview  # preview the production bundle
 src/
 ├── components/
 │   ├── Library.svelte      # shelf: upload, list, delete
-│   └── Reader.svelte       # chapter view + navigation
+│   ├── Reader.svelte       # chapter view + navigation + active-sentence highlight
+│   └── Player.svelte       # narration controls (play/pause/prev/next/rate)
 ├── stores/
-│   └── books.ts            # library + current-book state, progress persistence
+│   ├── books.ts            # library + current-book state, progress persistence
+│   └── player.ts           # narration state machine (idle/playing/paused)
 ├── lib/
 │   ├── db.ts               # IndexedDB helpers
 │   ├── epub-loader.ts      # epub.js wrapper → { metadata, chapters }
-│   └── text-chunker.ts     # sentence-aware chunking for TTS (Phase 2)
+│   ├── text-chunker.ts     # sentence-aware chunking (feeds the player)
+│   └── tts.ts              # TTSEngine interface + WebSpeechEngine impl
 ├── styles/
 │   └── global.css          # paper/ink design tokens
 ├── App.svelte              # shelf ↔ reader routing
@@ -150,4 +159,4 @@ src/
 
 ## Progress
 
-**Current status:** Phase 1 complete modulo real-device testing. Shelf, reader, and persistence wired up; visual system in place. Phase 2 (TTS) begins next session.
+**Current status:** Phase 1 ✓, Phase 2 ✓ (Web Speech backend — narration, active-sentence highlight, speed control). Phase 2.5 (KittenTTS ONNX engine) and Phase 3 (PWA / offline) up next.

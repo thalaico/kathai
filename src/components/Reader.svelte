@@ -1,18 +1,26 @@
 <script lang="ts">
   import { currentBook, currentChapterIndex, saveProgress } from '$stores/books';
   import { extractPlainText } from '$lib/epub-loader';
+  import { chunkBySentences } from '$lib/text-chunker';
+  import { playerState, startPlaying, stopPlaying } from '$stores/player';
+  import Player from './Player.svelte';
 
   let plainText = $state('');
+  let sentences = $state<string[]>([]);
 
   $effect(() => {
     const book = $currentBook;
     const idx = $currentChapterIndex;
     if (book && idx >= 0 && book.chapters[idx]) {
       plainText = extractPlainText(book.chapters[idx].htmlContent);
+      sentences = chunkBySentences(plainText, 40);
       saveProgress(book.id, idx).catch(console.error);
     } else {
       plainText = '';
+      sentences = [];
     }
+    // Stop narration when chapter changes.
+    stopPlaying();
   });
 
   function nextChapter() {
@@ -29,7 +37,16 @@
   }
 
   function back() {
+    stopPlaying();
     currentBook.set(null);
+  }
+
+  function listen() {
+    if ($playerState.chunks.length > 0) {
+      stopPlaying();
+    } else {
+      startPlaying(plainText);
+    }
   }
 </script>
 
@@ -46,6 +63,9 @@
           <p class="author">{book.author}</p>
         {/if}
       </div>
+      <button class="listen" onclick={listen}>
+        {$playerState.chunks.length > 0 ? '■' : '♪'}
+      </button>
     </header>
 
     <hr class="rule" />
@@ -55,10 +75,18 @@
     </p>
 
     <article>
-      {#each plainText.split(/\n{2,}|\r\n{2,}/) as para}
-        <p>{para}</p>
+      {#each sentences as sentence, i}
+        <span
+          class="sentence"
+          class:active={$playerState.status !== 'idle' && $playerState.currentChunk === i}
+        >
+          {sentence}
+        </span>
+        {' '}
       {/each}
     </article>
+
+    <Player />
 
     <hr class="rule" />
 
@@ -104,6 +132,21 @@
     color: var(--ink-soft);
   }
 
+  .listen {
+    position: absolute;
+    right: 0;
+    top: 0;
+    padding: 0.25rem 0.5rem;
+    color: var(--ink-faint);
+    font-size: 1.1rem;
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .listen:hover {
+    color: var(--ink);
+  }
+
   .title-block {
     padding: 0.25rem 3rem;
   }
@@ -146,22 +189,15 @@
     hyphens: auto;
   }
 
-  article :global(p) {
-    margin-bottom: 1rem;
-    text-indent: 1.5rem;
+  .sentence {
+    transition: background-color 0.25s ease;
+    border-radius: 2px;
+    padding: 0 1px;
   }
 
-  article :global(p:first-child) {
-    text-indent: 0;
-  }
-
-  article :global(p:first-child::first-letter) {
-    font-size: 2.8rem;
-    float: left;
-    line-height: 0.9;
-    padding-right: 0.35rem;
-    padding-top: 0.3rem;
-    font-weight: 500;
+  .sentence.active {
+    background-color: var(--paper-edge);
+    box-shadow: 0 0 0 3px var(--paper-edge);
   }
 
   footer {
