@@ -1,11 +1,70 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath } from 'node:url'
 
+/**
+ * Dev-only mirror of netlify/edge-functions/epub.ts. Lets `bun run dev`
+ * serve /api/epub without needing `netlify dev`.
+ */
+const ALLOWED_EPUB_HOSTS = new Set([
+  'www.gutenberg.org',
+  'gutenberg.org',
+  'www.gutenberg.net.au',
+])
+
+function devEpubProxy(): Plugin {
+  return {
+    name: 'kathai-dev-epub-proxy',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use('/api/epub', async (req, res) => {
+        try {
+          const u = new URL(req.url ?? '', 'http://localhost')
+          const target = u.searchParams.get('url')
+          if (!target) {
+            res.statusCode = 400
+            res.end('missing ?url=')
+            return
+          }
+          let upstreamUrl: URL
+          try {
+            upstreamUrl = new URL(target)
+          } catch {
+            res.statusCode = 400
+            res.end('invalid url')
+            return
+          }
+          if (
+            upstreamUrl.protocol !== 'https:' ||
+            !ALLOWED_EPUB_HOSTS.has(upstreamUrl.hostname)
+          ) {
+            res.statusCode = 403
+            res.end('host not allowed')
+            return
+          }
+          const upstream = await fetch(upstreamUrl.toString(), { redirect: 'follow' })
+          res.statusCode = upstream.status
+          res.setHeader(
+            'content-type',
+            upstream.headers.get('content-type') ?? 'application/epub+zip',
+          )
+          res.setHeader('access-control-allow-origin', '*')
+          const buffer = Buffer.from(await upstream.arrayBuffer())
+          res.end(buffer)
+        } catch (err) {
+          res.statusCode = 502
+          res.end(`proxy error: ${(err as Error).message}`)
+        }
+      })
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     svelte(),
+    devEpubProxy(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icon.svg'],
@@ -46,8 +105,8 @@ export default defineConfig({
             },
           },
           {
-            // Gutenberg EPUB downloads — cache once, keep offline.
-            urlPattern: /^https:\/\/www\.gutenberg\.org\/.*\.epub/,
+            // Proxied EPUB downloads — cache once, keep offline.
+            urlPattern: ({ url }) => url.pathname === '/api/epub',
             handler: 'CacheFirst',
             options: {
               cacheName: 'gutenberg-epubs-v1',

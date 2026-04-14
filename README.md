@@ -140,13 +140,33 @@ bun install
 bun run dev
 ```
 
-Open http://localhost:5173. Grab a free EPUB from [Project Gutenberg](https://www.gutenberg.org/) to test.
+Open http://localhost:5173. Grab a free EPUB from [Project Gutenberg](https://www.gutenberg.org/) to test — or just use the Discover panel, which works locally via a tiny Vite dev middleware that mirrors the Netlify edge function.
 
 ```bash
 bun run check    # typecheck
 bun run build    # production bundle
 bun run preview  # preview the production bundle
 ```
+
+## Deploy
+
+### Netlify (recommended — fastest path to a phone-testable URL)
+
+1. Push to GitHub (already set up at `thalaico/kathai`).
+2. Go to [app.netlify.com](https://app.netlify.com) → **Add new site → Import an existing project** → pick the `kathai` repo.
+3. Netlify reads `netlify.toml` automatically. No settings to change. Click **Deploy**.
+4. First build takes ~30 seconds. You'll get a URL like `https://kathai-random-slug.netlify.app`.
+5. Open that URL on your phone → Safari *Share → Add to Home Screen*, or Chrome *Install app*. Kathai now runs standalone, offline-capable, with the Project Gutenberg proxy working natively.
+
+The proxy lives at `netlify/edge-functions/epub.ts` and deploys automatically alongside the static site. It's stateless, whitelists only `gutenberg.org` hosts, and exists solely to tack `Access-Control-Allow-Origin: *` onto responses Gutenberg doesn't send.
+
+### Why the proxy exists
+
+`www.gutenberg.org` doesn't send CORS headers on file downloads, so a browser `fetch()` is blocked. Public CORS proxies are unreliable (paid plans, 500 errors, rate limits), so kathai ships its own 40-line edge function. Same contract (`/api/epub?url=...`) runs in Vite dev via an inline middleware, so `bun run dev` works without `netlify dev`.
+
+### Vercel
+
+Not set up yet, but it's a ~15-line port: move the function to `api/epub.ts` with `export const config = { runtime: 'edge' }` and add a `vercel.json` SPA rewrite. Happy to wire this up if you'd rather deploy there — let me know.
 
 ## Layout
 

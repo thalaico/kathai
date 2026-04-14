@@ -110,15 +110,25 @@ export const LANGUAGES: { code: string; label: string }[] = [
   { code: 'la', label: 'latina' },
 ];
 
+/**
+ * Build the URL used to actually fetch an EPUB file.
+ *
+ * Project Gutenberg doesn't serve CORS headers, so a direct browser fetch
+ * is blocked. Kathai ships with a stateless edge function at /api/epub that
+ * streams the upstream bytes through with the missing header. It's a
+ * five-line proxy that stores nothing and only whitelists gutenberg.org.
+ */
+export function proxiedEpubUrl(epubUrl: string): string {
+  return `/api/epub?url=${encodeURIComponent(epubUrl)}`;
+}
+
 export async function downloadGutenbergEPUB(
   book: GutenbergBook,
   signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
   if (!book.epubUrl) throw new Error('No EPUB available for this book');
 
-  // Gutenberg mirrors generally serve CORS *. If this throws on some network,
-  // surface it — we won't paper over it with a proxy (zero-backend promise).
-  const res = await fetch(book.epubUrl, { signal, mode: 'cors' });
-  if (!res.ok) throw new Error(`Gutenberg ${res.status}`);
+  const res = await fetch(proxiedEpubUrl(book.epubUrl), { signal });
+  if (!res.ok) throw new Error(`Proxy returned ${res.status}`);
   return res.arrayBuffer();
 }
