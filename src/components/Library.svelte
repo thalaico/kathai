@@ -1,14 +1,7 @@
 <script lang="ts">
-  import {
-    books,
-    addBook,
-    removeBook,
-    currentBook,
-    currentChapterIndex,
-    getProgress,
-    type Book,
-  } from '$stores/books';
+  import { books, addBook, removeBook, getProgress, type Book } from '$stores/books';
   import { loadEPUBFile } from '$lib/epub-loader';
+  import { navigateToBook } from '$lib/router';
   import Discover from './Discover.svelte';
 
   let isLoading = $state(false);
@@ -44,8 +37,7 @@
 
   async function selectBook(book: Book) {
     const progress = await getProgress(book.id);
-    currentChapterIndex.set(progress?.chapterIndex ?? 0);
-    currentBook.set(book);
+    navigateToBook(book, progress?.chapterIndex ?? 0);
   }
 
   async function deleteBook(e: Event, bookId: string) {

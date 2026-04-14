@@ -3,6 +3,7 @@
   import { extractPlainText, type Chapter } from '$lib/epub-loader';
   import { chunkBySentences } from '$lib/text-chunker';
   import { playerState, startPlaying, stopPlaying } from '$stores/player';
+  import { navigateToChapter, navigateToShelf } from '$lib/router';
   import Player from './Player.svelte';
 
   const MIN_CHAPTER_LENGTH = 50;
@@ -46,7 +47,7 @@
       if (!autoAdvance) return;
       const next = $currentChapterIndex + 1;
       if (next < effectiveChapters.length) {
-        currentChapterIndex.set(next);
+        navigateToChapter(next);
         queueMicrotask(() => playCurrentChapter());
       } else {
         autoAdvance = false;
@@ -59,7 +60,7 @@
   $effect(() => {
     const len = effectiveChapters.length;
     if (len > 0 && $currentChapterIndex >= len) {
-      currentChapterIndex.set(0);
+      navigateToChapter(0);
     }
   });
 
@@ -92,7 +93,7 @@
     if ($currentChapterIndex < effectiveChapters.length - 1) {
       autoAdvance = false;
       stopPlaying();
-      currentChapterIndex.set($currentChapterIndex + 1);
+      navigateToChapter($currentChapterIndex + 1);
     }
   }
 
@@ -100,14 +101,14 @@
     if ($currentChapterIndex > 0) {
       autoAdvance = false;
       stopPlaying();
-      currentChapterIndex.set($currentChapterIndex - 1);
+      navigateToChapter($currentChapterIndex - 1);
     }
   }
 
   function back() {
     autoAdvance = false;
     stopPlaying();
-    currentBook.set(null);
+    navigateToShelf();
   }
 
   function listen() {
