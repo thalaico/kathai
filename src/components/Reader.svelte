@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, tick } from 'svelte';
   import { currentBook, currentChapterIndex, saveProgress } from '$stores/books';
   import {
     extractPlainText,
@@ -13,27 +14,16 @@
   import { navigateToChapter, navigateToShelf } from '$lib/router';
   import Player from './Player.svelte';
 
-  /**
-   * Produce the effective chapter list — the one the user navigates through.
-   *
-   * Two independent cleanups happen here so both new imports and books
-   * cached from earlier builds behave correctly:
-   *
-   *   1. Filter sections with < 50 chars of real text (covers, blanks).
-   *   2. Re-split any section that exceeds SPLIT_LENGTH_THRESHOLD and has
-   *      multiple headings — fixes old cached Gutenberg books whose
-   *      IndexedDB record has a single giant "all chapters in one blob"
-   *      entry, so they get chapter-level navigation without a re-import.
-   */
+  // ─────────────────────────────────────────────────────────────
+  // Effective chapter list (with runtime re-split for old caches)
+  // ─────────────────────────────────────────────────────────────
+
   let effectiveChapters = $derived.by<Chapter[]>(() => {
     const book = $currentBook;
     if (!book) return [];
-
     const out: Chapter[] = [];
-
     for (const ch of book.chapters) {
       const storedText = ch.plainText ?? extractPlainText(ch.htmlContent);
-
       if (storedText.length >= SPLIT_LENGTH_THRESHOLD && ch.htmlContent) {
         try {
           const parsed = new DOMParser().parseFromString(ch.htmlContent, 'text/html');
@@ -61,86 +51,101 @@
           console.warn('Failed to re-split stored chapter', ch.id, err);
         }
       }
-
       if (storedText.length >= MIN_CHAPTER_LENGTH) {
         out.push({ ...ch, plainText: storedText });
       }
     }
-
     return out.length > 0 ? out : book.chapters;
   });
 
-  let plainText = $state('');
-  let sentences = $state<string[]>([]);
-  let autoAdvance = $state(false);
-  let sentenceEls = $state<(HTMLSpanElement | null)[]>([]);
+  let currentChapter = $derived(effectiveChapters[$currentChapterIndex] ?? null);
+  let sentences = $derived(
+    currentChapter ? chunkBySentences(currentChapter.plainText, 40) : [],
+  );
 
-  function playCurrentChapter() {
-    const chapters = effectiveChapters;
-    const idx = $currentChapterIndex;
-    const chapter = chapters[idx];
-    if (!chapter) return;
-    autoAdvance = true;
-    startPlaying(chapter.plainText, () => {
-      // Fires when the chapter finishes naturally. If another chapter
-      // exists and auto-advance is still armed, roll forward and keep going.
-      if (!autoAdvance) return;
-      const next = $currentChapterIndex + 1;
-      if (next < effectiveChapters.length) {
-        navigateToChapter(next);
-        queueMicrotask(() => playCurrentChapter());
-      } else {
-        autoAdvance = false;
-      }
-    });
+  // ─────────────────────────────────────────────────────────────
+  // Pagination via CSS multicol + JS-measured transform
+  // ─────────────────────────────────────────────────────────────
+
+  let pagesContainer = $state<HTMLDivElement | null>(null);
+  let articleEl = $state<HTMLElement | null>(null);
+  let containerWidth = $state(0);
+  let totalPages = $state(1);
+  let currentPage = $state(0);
+  /** Set to 'last' when a chapter change should land on the final page. */
+  let pendingPageTarget: 'first' | 'last' = 'first';
+
+  async function measure() {
+    if (!pagesContainer || !articleEl) return;
+    await tick();
+    const cw = pagesContainer.clientWidth;
+    if (cw === 0) return;
+    containerWidth = cw;
+    const sw = articleEl.scrollWidth;
+    totalPages = Math.max(1, Math.round(sw / cw));
+    if (pendingPageTarget === 'last') {
+      currentPage = totalPages - 1;
+      pendingPageTarget = 'first';
+    } else if (currentPage >= totalPages) {
+      currentPage = 0;
+    }
   }
 
-  // Clamp the saved index if the effective chapter list is shorter than
-  // whatever index got persisted from an earlier build.
+  // Remeasure whenever the sentences (and therefore the laid-out text) change.
+  $effect(() => {
+    // Read the reactive deps so the effect fires on chapter changes.
+    void sentences;
+    void containerWidth;
+    measure();
+  });
+
+  onMount(() => {
+    const ro = new ResizeObserver(() => measure());
+    if (pagesContainer) ro.observe(pagesContainer);
+    return () => ro.disconnect();
+  });
+
+  // Save reading progress as the chapter changes.
+  $effect(() => {
+    const book = $currentBook;
+    const idx = $currentChapterIndex;
+    if (book && idx >= 0) {
+      saveProgress(book.id, idx).catch(console.error);
+    }
+  });
+
+  // Clamp if persisted index overruns the (possibly re-split) chapter list.
   $effect(() => {
     const len = effectiveChapters.length;
-    if (len > 0 && $currentChapterIndex >= len) {
-      navigateToChapter(0);
-    }
+    if (len > 0 && $currentChapterIndex >= len) navigateToChapter(0);
   });
 
-  $effect(() => {
-    const chapters = effectiveChapters;
-    const idx = $currentChapterIndex;
-    const book = $currentBook;
-    if (chapters.length > 0 && idx >= 0 && chapters[idx]) {
-      plainText = chapters[idx].plainText;
-      sentences = chunkBySentences(plainText, 40);
-      sentenceEls = new Array(sentences.length).fill(null);
-      if (book) saveProgress(book.id, idx).catch(console.error);
-    } else {
-      plainText = '';
-      sentences = [];
-      sentenceEls = [];
-    }
-  });
+  // ─────────────────────────────────────────────────────────────
+  // Navigation: page-first, with auto chapter advance at the edges
+  // ─────────────────────────────────────────────────────────────
 
-  // Scroll the active sentence into view while narrating.
-  $effect(() => {
-    if ($playerState.status === 'idle') return;
-    const el = sentenceEls[$playerState.currentChunk];
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  function nextPage() {
+    if (currentPage < totalPages - 1) {
+      currentPage++;
+      return;
     }
-  });
-
-  function nextChapter() {
     if ($currentChapterIndex < effectiveChapters.length - 1) {
       autoAdvance = false;
       stopPlaying();
+      pendingPageTarget = 'first';
       navigateToChapter($currentChapterIndex + 1);
     }
   }
 
-  function prevChapter() {
+  function prevPage() {
+    if (currentPage > 0) {
+      currentPage--;
+      return;
+    }
     if ($currentChapterIndex > 0) {
       autoAdvance = false;
       stopPlaying();
+      pendingPageTarget = 'last';
       navigateToChapter($currentChapterIndex - 1);
     }
   }
@@ -151,6 +156,29 @@
     navigateToShelf();
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // TTS wiring
+  // ─────────────────────────────────────────────────────────────
+
+  let autoAdvance = $state(false);
+
+  function playCurrentChapter() {
+    const ch = currentChapter;
+    if (!ch) return;
+    autoAdvance = true;
+    startPlaying(ch.plainText, () => {
+      if (!autoAdvance) return;
+      const next = $currentChapterIndex + 1;
+      if (next < effectiveChapters.length) {
+        pendingPageTarget = 'first';
+        navigateToChapter(next);
+        queueMicrotask(() => playCurrentChapter());
+      } else {
+        autoAdvance = false;
+      }
+    });
+  }
+
   function listen() {
     if ($playerState.chunks.length > 0) {
       autoAdvance = false;
@@ -159,13 +187,25 @@
       playCurrentChapter();
     }
   }
+
+  // Keyboard navigation: ←/→ flip pages.
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowRight' || e.key === ' ') {
+      e.preventDefault();
+      nextPage();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      prevPage();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 {#if $currentBook}
   {@const book = $currentBook}
   {@const idx = $currentChapterIndex}
-  {@const chapter = effectiveChapters[idx]}
-  <div class="page">
+  <div class="reader">
     <header>
       <button class="back" onclick={back}>← shelf</button>
       <div class="title-block">
@@ -182,30 +222,44 @@
     <hr class="rule" />
 
     <p class="chapter-label">
-      {chapter?.label || `Chapter ${idx + 1}`}
+      {currentChapter?.label || `Chapter ${idx + 1}`}
     </p>
 
-    <article>
-      {#each sentences as sentence, i}
-        <span
-          class="sentence"
-          class:active={$playerState.status !== 'idle' && $playerState.currentChunk === i}
-          bind:this={sentenceEls[i]}
-        >
-          {sentence}
-        </span>
-        {' '}
-      {/each}
-    </article>
+    <div class="pages" bind:this={pagesContainer}>
+      <article
+        bind:this={articleEl}
+        style:transform={`translateX(-${currentPage * 100}%)`}
+      >
+        {#each sentences as sentence, i (i)}
+          <span
+            class="sentence"
+            class:active={$playerState.status !== 'idle' && $playerState.currentChunk === i}
+          >{sentence}</span>{' '}
+        {/each}
+      </article>
+      <!-- tap zones — left half prev, right half next -->
+      <button class="zone left" onclick={prevPage} aria-label="previous page"></button>
+      <button class="zone right" onclick={nextPage} aria-label="next page"></button>
+    </div>
 
     <Player />
 
     <hr class="rule" />
 
     <footer>
-      <button onclick={prevChapter} disabled={idx === 0}>← prev</button>
-      <span class="folio">{idx + 1} / {effectiveChapters.length}</span>
-      <button onclick={nextChapter} disabled={idx >= effectiveChapters.length - 1}>
+      <button class="ctrl" onclick={prevPage} disabled={currentPage === 0 && idx === 0}>
+        ← prev
+      </button>
+      <span class="folio">
+        {currentPage + 1} / {totalPages}
+        <span class="sep">·</span>
+        ch. {idx + 1}/{effectiveChapters.length}
+      </span>
+      <button
+        class="ctrl"
+        onclick={nextPage}
+        disabled={currentPage === totalPages - 1 && idx === effectiveChapters.length - 1}
+      >
         next →
       </button>
     </footer>
@@ -215,13 +269,14 @@
 {/if}
 
 <style>
-  .page {
+  .reader {
     max-width: 34rem;
     margin: 0 auto;
-    padding: 2.5rem 1.75rem 3rem;
-    min-height: 100vh;
+    padding: 2rem 1.75rem 1.5rem;
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    width: 100%;
   }
 
   header {
@@ -238,11 +293,12 @@
     font-style: italic;
     font-size: 0.9rem;
     min-height: 44px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
   }
-
-  .back:hover {
-    color: var(--ink-soft);
-  }
+  .back:hover { color: var(--ink-soft); }
 
   .listen {
     position: absolute;
@@ -253,18 +309,17 @@
     font-size: 1.1rem;
     min-height: 44px;
     min-width: 44px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
   }
+  .listen:hover { color: var(--ink); }
 
-  .listen:hover {
-    color: var(--ink);
-  }
-
-  .title-block {
-    padding: 0.25rem 3rem;
-  }
+  .title-block { padding: 0.25rem 3rem; }
 
   h1 {
-    font-size: 1.35rem;
+    font-size: 1.2rem;
     font-weight: 500;
     font-variant: small-caps;
     letter-spacing: 0.04em;
@@ -274,31 +329,46 @@
     margin-top: 0.15rem;
     font-style: italic;
     color: var(--ink-soft);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
   }
 
   .rule {
     border: none;
     border-top: 1px solid var(--rule);
-    margin: 1.5rem 0;
+    margin: 1rem 0;
   }
 
   .chapter-label {
     text-align: center;
     font-style: italic;
     color: var(--ink-soft);
-    font-size: 0.95rem;
-    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
     font-variant: small-caps;
     letter-spacing: 0.08em;
   }
 
-  article {
-    flex: 1;
+  /* The pagination surface. Fixed-height, multicol article inside, columns
+     slide via translateX. min-height:0 is critical so the flex child can
+     actually shrink to give the multicol element a concrete height. */
+  .pages {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .pages article {
+    height: 100%;
+    column-width: 100%;
+    column-gap: 0;
+    column-fill: auto;
     font-size: 1.05rem;
-    line-height: 1.8;
+    line-height: 1.75;
     text-align: justify;
     hyphens: auto;
+    transition: transform 0.28s cubic-bezier(0.3, 0.7, 0.4, 1);
+    will-change: transform;
   }
 
   .sentence {
@@ -312,37 +382,56 @@
     box-shadow: 0 0 0 3px var(--paper-edge);
   }
 
+  /* Invisible tap zones over the page for touch navigation. */
+  .zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 30%;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+  }
+  .zone.left { left: 0; }
+  .zone.right { right: 0; }
+  .zone:focus-visible {
+    outline: 1px dashed var(--ink-faint);
+  }
+
   footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
+    padding-top: 0.25rem;
     padding-bottom: env(safe-area-inset-bottom);
   }
 
-  footer button {
+  .ctrl {
     color: var(--ink-soft);
     font-style: italic;
     padding: 0.5rem 0;
     min-height: 44px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.95rem;
   }
-
-  footer button:hover:not(:disabled) {
-    color: var(--ink);
-  }
-
-  footer button:disabled {
+  .ctrl:hover:not(:disabled) { color: var(--ink); }
+  .ctrl:disabled {
     color: var(--ink-faint);
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: not-allowed;
   }
 
   .folio {
     color: var(--ink-faint);
-    font-size: 0.85rem;
+    font-size: 0.78rem;
     font-variant: small-caps;
     letter-spacing: 0.1em;
   }
+  .folio .sep { margin: 0 0.35rem; }
 
   .empty {
     text-align: center;
