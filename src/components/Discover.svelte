@@ -13,9 +13,8 @@
   let loadedForQuery = $state<string | null>(null);
 
   let searchCtrl: AbortController | null = null;
-  let debounce: ReturnType<typeof setTimeout> | null = null;
 
-  async function doSearch(q: string, nextPage = 1) {
+  async function doSearch(q: string, nextPage: number) {
     searchCtrl?.abort();
     searchCtrl = new AbortController();
     loading = true;
@@ -36,10 +35,13 @@
     }
   }
 
-  function onQueryChange() {
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => doSearch(query, 1), 300);
-  }
+  // Debounced search, re-runs whenever `query` changes. Fires once on mount
+  // with the empty string → popular-first default load.
+  $effect(() => {
+    const q = query;
+    const t = setTimeout(() => doSearch(q, 1), q === '' ? 0 : 300);
+    return () => clearTimeout(t);
+  });
 
   function loadMore() {
     doSearch(loadedForQuery ?? '', page + 1);
@@ -69,8 +71,6 @@
     }
   }
 
-  // Kick off an initial "popular" load.
-  doSearch('', 1);
 </script>
 
 <section class="discover">
@@ -80,9 +80,8 @@
   <div class="search">
     <input
       type="text"
-      placeholder="search titles, authors, subjects…"
+      placeholder="search titles or authors…"
       bind:value={query}
-      oninput={onQueryChange}
     />
   </div>
 
