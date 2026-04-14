@@ -1,0 +1,87 @@
+/*
+ * Kathai — minimal e-ink / paperback aesthetic.
+ * Warm paper background, serif type, thin rules, no chrome.
+ */
+
+:root {
+  --paper: #f4ecd8;
+  --paper-edge: #e8dfc6;
+  --ink: #1a1613;
+  --ink-soft: #5a5048;
+  --ink-faint: #8a8076;
+  --rule: #c9bfa7;
+  --accent: #5a3a20;
+
+  --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua',
+    Georgia, 'Times New Roman', serif;
+  --mono: 'Courier New', Courier, monospace;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1a1714;
+    --paper-edge: #24201c;
+    --ink: #e8dcc4;
+    --ink-soft: #a89880;
+    --ink-faint: #70655a;
+    --rule: #3a332a;
+    --accent: #d4a574;
+
+    color-scheme: dark;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+a,
+label {
+  touch-action: manipulation;
+  font-family: inherit;
+  color: inherit;
+}
+
+button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+input,
+input[type='file'] {
+  font-family: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+@supports (padding: max(0px)) {
+  body {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+    padding-top: max(0px, env(safe-area-inset-top));
+  }
+}
