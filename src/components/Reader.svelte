@@ -1,33 +1,73 @@
 <script lang="ts">
   import { currentBook, currentChapterIndex, saveProgress } from '$stores/books';
-  import { extractPlainText, type Chapter } from '$lib/epub-loader';
+  import {
+    extractPlainText,
+    pickSplitTag,
+    splitAtHeadings,
+    MIN_CHAPTER_LENGTH,
+    SPLIT_LENGTH_THRESHOLD,
+    type Chapter,
+  } from '$lib/epub-loader';
   import { chunkBySentences } from '$lib/text-chunker';
   import { playerState, startPlaying, stopPlaying } from '$stores/player';
   import { navigateToChapter, navigateToShelf } from '$lib/router';
   import Player from './Player.svelte';
 
-  const MIN_CHAPTER_LENGTH = 50;
-
-  function chapterText(ch: Chapter): string {
-    // Books loaded before plainText was pre-extracted may not have it stored.
-    return ch.plainText ?? extractPlainText(ch.htmlContent);
-  }
-
   /**
    * Produce the effective chapter list — the one the user navigates through.
-   * Books already saved in IndexedDB from earlier builds have empty-ish
-   * sections (cover, title page) in their `chapters` array; we drop those
-   * here at display time so Next/Prev skip over them.
+   *
+   * Two independent cleanups happen here so both new imports and books
+   * cached from earlier builds behave correctly:
+   *
+   *   1. Filter sections with < 50 chars of real text (covers, blanks).
+   *   2. Re-split any section that exceeds SPLIT_LENGTH_THRESHOLD and has
+   *      multiple headings — fixes old cached Gutenberg books whose
+   *      IndexedDB record has a single giant "all chapters in one blob"
+   *      entry, so they get chapter-level navigation without a re-import.
    */
   let effectiveChapters = $derived.by<Chapter[]>(() => {
     const book = $currentBook;
     if (!book) return [];
-    const withText = book.chapters.map((ch) => ({
-      ...ch,
-      plainText: chapterText(ch),
-    }));
-    const filtered = withText.filter((ch) => ch.plainText.length >= MIN_CHAPTER_LENGTH);
-    return filtered.length > 0 ? filtered : withText;
+
+    const out: Chapter[] = [];
+
+    for (const ch of book.chapters) {
+      const storedText = ch.plainText ?? extractPlainText(ch.htmlContent);
+
+      if (storedText.length >= SPLIT_LENGTH_THRESHOLD && ch.htmlContent) {
+        try {
+          const parsed = new DOMParser().parseFromString(ch.htmlContent, 'text/html');
+          const body = parsed.body;
+          if (body) {
+            const tag = pickSplitTag(body);
+            if (tag) {
+              const parts = splitAtHeadings(body, tag);
+              if (parts.length >= 2) {
+                parts.forEach((part, i) => {
+                  if (part.text.length >= MIN_CHAPTER_LENGTH) {
+                    out.push({
+                      id: `${ch.id}--${i}`,
+                      label: part.label || `${ch.label} ${i + 1}`,
+                      htmlContent: '',
+                      plainText: part.text,
+                    });
+                  }
+                });
+                continue;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to re-split stored chapter', ch.id, err);
+        }
+      }
+
+      if (storedText.length >= MIN_CHAPTER_LENGTH) {
+        out.push({ ...ch, plainText: storedText });
+      }
+    }
+
+    return out.length > 0 ? out : book.chapters;
   });
 
   let plainText = $state('');
