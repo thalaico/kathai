@@ -65,14 +65,22 @@ function normalize(b: GutendexBook): GutenbergBook {
   };
 }
 
+export interface SearchOptions {
+  page?: number;
+  /** ISO 639-1 code, or 'all' / undefined to skip the filter. */
+  language?: string;
+  signal?: AbortSignal;
+}
+
 export async function searchGutenberg(
   query: string,
-  page = 1,
-  signal?: AbortSignal,
+  opts: SearchOptions = {},
 ): Promise<SearchResult> {
+  const { page = 1, language, signal } = opts;
   const params = new URLSearchParams();
   if (query.trim()) params.set('search', query.trim());
   params.set('page', String(page));
+  if (language && language !== 'all') params.set('languages', language);
   // Popular first when not searching, otherwise default relevance.
   if (!query.trim()) params.set('sort', 'popular');
 
@@ -86,6 +94,21 @@ export async function searchGutenberg(
     total: data.count,
   };
 }
+
+/** Top languages on Project Gutenberg, by book count (approx). */
+export const LANGUAGES: { code: string; label: string }[] = [
+  { code: 'all', label: 'all languages' },
+  { code: 'en', label: 'english' },
+  { code: 'fr', label: 'français' },
+  { code: 'de', label: 'deutsch' },
+  { code: 'es', label: 'español' },
+  { code: 'it', label: 'italiano' },
+  { code: 'pt', label: 'português' },
+  { code: 'nl', label: 'nederlands' },
+  { code: 'fi', label: 'suomi' },
+  { code: 'zh', label: '中文' },
+  { code: 'la', label: 'latina' },
+];
 
 export async function downloadGutenbergEPUB(
   book: GutenbergBook,
