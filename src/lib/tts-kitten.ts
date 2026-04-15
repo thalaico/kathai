@@ -28,9 +28,10 @@ type LoadStatus =
 type WorkerMsg =
   | { type: 'status'; message: string }
   | { type: 'ready'; voices: string[]; modelName?: string }
-  | { type: 'progress'; current: number; total: number }
-  | { type: 'audio'; audio: ArrayBuffer; sampleRate: number }
-  | { type: 'error'; error: string };
+  | { type: 'meta'; reqId: number; total: number }
+  | { type: 'chunk'; reqId: number; index: number; total: number; audio: ArrayBuffer; sampleRate: number }
+  | { type: 'done'; reqId: number }
+  | { type: 'error'; reqId?: number; error: string };
 
 export class KittenEngine implements TTSEngine {
   readonly name = 'kitten';
@@ -42,6 +43,9 @@ export class KittenEngine implements TTSEngine {
   private status: LoadStatus = { type: 'idle' };
   private readyPromise: Promise<void> | null = null;
   private onStatus: ((s: LoadStatus) => void) | null = null;
+  /** Monotonically-increasing id stamped on each synth request. Stale
+      worker messages (reqId !== this) get dropped. */
+  private nextReqId = 0;
 
   /** Whether the speak pipeline is ready to accept input. */
   isAvailable(): boolean {
@@ -147,9 +151,16 @@ export class KittenEngine implements TTSEngine {
       this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
     const ctx = this.audioCtx;
+    const reqId = ++this.nextReqId;
+    const playbackRate = Math.max(0.25, Math.min(4, opts.rate ?? 1));
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
+      let totalChunks = Infinity;
+      let playedCount = 0;
+      let synthesisDone = false;
+      /** Promise chain that serializes playback of arriving chunks. */
+      let playChain: Promise<void> = Promise.resolve();
 
       const finish = (err?: Error) => {
         if (settled) return;
@@ -161,6 +172,12 @@ export class KittenEngine implements TTSEngine {
       };
 
       const onAbort = () => {
+        // Tell the worker to stop synthesizing the remaining chunks.
+        try {
+          this.worker!.postMessage({ action: 'cancel' });
+        } catch {
+          /* ignore */
+        }
         try {
           this.currentSource?.stop();
         } catch {
@@ -170,28 +187,67 @@ export class KittenEngine implements TTSEngine {
         finish(new DOMException('aborted', 'AbortError'));
       };
 
-      const onMessage = async (e: MessageEvent<WorkerMsg>) => {
-        const msg = e.data;
-        if (msg.type === 'audio') {
+      const playOne = (audioBuf: ArrayBuffer, sampleRate: number): Promise<void> =>
+        new Promise<void>((res, rej) => {
+          if (settled) {
+            rej(new DOMException('aborted', 'AbortError'));
+            return;
+          }
           try {
-            const samples = new Float32Array(msg.audio);
-            const buffer = ctx.createBuffer(1, samples.length, msg.sampleRate);
+            const samples = new Float32Array(audioBuf);
+            if (samples.length === 0) {
+              res();
+              return;
+            }
+            const buffer = ctx.createBuffer(1, samples.length, sampleRate);
             buffer.getChannelData(0).set(samples);
             const src = ctx.createBufferSource();
             src.buffer = buffer;
-            const playbackRate = Math.max(0.25, Math.min(4, opts.rate ?? 1));
             src.playbackRate.value = playbackRate;
             src.connect(ctx.destination);
             this.currentSource = src;
             src.onended = () => {
               if (this.currentSource === src) this.currentSource = null;
-              finish();
+              res();
             };
-            if (ctx.state === 'suspended') await ctx.resume();
-            src.start();
+            if (ctx.state === 'suspended') {
+              ctx.resume().then(
+                () => src.start(),
+                (err) => rej(err),
+              );
+            } else {
+              src.start();
+            }
           } catch (err) {
-            finish(err as Error);
+            rej(err as Error);
           }
+        });
+
+      const onMessage = (e: MessageEvent<WorkerMsg>) => {
+        const msg = e.data;
+        // Drop any message that belongs to a different synth request.
+        if ('reqId' in msg && msg.reqId !== reqId) return;
+
+        if (msg.type === 'meta') {
+          totalChunks = msg.total;
+        } else if (msg.type === 'chunk') {
+          // Queue this chunk behind the currently-playing one.
+          playChain = playChain
+            .then(() => playOne(msg.audio, msg.sampleRate))
+            .then(() => {
+              playedCount++;
+              if (synthesisDone && playedCount >= totalChunks) finish();
+            })
+            .catch((err) => {
+              if (!settled) finish(err as Error);
+              // Re-throw so later .then() short-circuit. playChain is
+              // a terminal branch beyond this point.
+              throw err;
+            });
+        } else if (msg.type === 'done') {
+          synthesisDone = true;
+          // If playback already caught up, resolve now.
+          if (playedCount >= totalChunks) finish();
         } else if (msg.type === 'error') {
           finish(new Error(msg.error));
         }
@@ -206,9 +262,10 @@ export class KittenEngine implements TTSEngine {
       this.worker!.addEventListener('message', onMessage);
       this.worker!.postMessage({
         action: 'synthesize',
+        reqId,
         text,
         voice: opts.voiceId || this.voicesList[0] || 'expr-voice-2-m',
-        speed: 1, // playbackRate applied on the AudioBufferSourceNode
+        speed: 1, // playbackRate is applied client-side on the AudioBufferSourceNode
       });
     });
   }

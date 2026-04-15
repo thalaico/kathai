@@ -424,27 +424,40 @@ async function synthChunk(text: string, voiceName: string, speed: number): Promi
   return audio.length > 24_000 ? audio.slice(0, audio.length - 5_000) : audio;
 }
 
-async function synthesize(text: string, voice: string, speed: number) {
+/**
+ * Streaming synthesis. Chunks are synthesized one at a time and posted
+ * back as soon as each is ready, so playback can start after the first
+ * chunk instead of waiting for the whole page. `reqId` is attached to
+ * every outbound message so the main thread can ignore stale chunks
+ * from an aborted synth, and is also checked between chunks to short-
+ * circuit if the user moved on.
+ */
+let currentReqId = 0;
+
+async function synthesize(text: string, voice: string, speed: number, reqId: number) {
   const chunks = chunkText(text);
+
+  postMessage({ type: 'meta', reqId, total: chunks.length });
   postStatus(`Synthesizing (${chunks.length} chunk${chunks.length > 1 ? 's' : ''})…`);
 
-  const parts: Float32Array[] = [];
   for (let i = 0; i < chunks.length; i++) {
-    postMessage({ type: 'progress', current: i + 1, total: chunks.length });
-    parts.push(await synthChunk(chunks[i], voice, speed));
+    if (currentReqId !== reqId) return;
+    const audio = await synthChunk(chunks[i], voice, speed);
+    if (currentReqId !== reqId) return;
+    postMessage(
+      {
+        type: 'chunk',
+        reqId,
+        index: i,
+        total: chunks.length,
+        audio: audio.buffer,
+        sampleRate: 24_000,
+      },
+      { transfer: [audio.buffer] },
+    );
   }
-  const total = parts.reduce((a, p) => a + p.length, 0);
-  const merged = new Float32Array(total);
-  let off = 0;
-  for (const p of parts) {
-    merged.set(p, off);
-    off += p.length;
-  }
-  // transfer the underlying buffer to the main thread for zero-copy.
-  postMessage(
-    { type: 'audio', audio: merged.buffer, sampleRate: 24_000 },
-    { transfer: [merged.buffer] },
-  );
+
+  if (currentReqId === reqId) postMessage({ type: 'done', reqId });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -461,15 +474,18 @@ self.addEventListener('message', async (e: MessageEvent) => {
     if (action === 'load') {
       await loadModel(data.repoId);
     } else if (action === 'synthesize') {
-      await synthesize(data.text, data.voice, data.speed);
+      currentReqId = data.reqId;
+      await synthesize(data.text, data.voice, data.speed, data.reqId);
+    } else if (action === 'cancel') {
+      // Bumping the sentinel makes the in-flight synth loop abandon
+      // its remaining chunks at the next boundary.
+      currentReqId = -1;
     }
   } catch (err) {
     const e = err as Error;
-    // Log to the worker console so it's visible in devtools, then post
-    // a formatted error with stack to the main thread.
     console.error('[kathai-tts-worker]', e);
     const detail = `${e.message ?? String(e)}${e.stack ? '\n' + e.stack : ''}`;
-    postMessage({ type: 'error', error: detail });
+    postMessage({ type: 'error', reqId: (data as any).reqId ?? -1, error: detail });
   }
 });
 
