@@ -124,6 +124,17 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
+        // Defensive — keep the navigation route from ever returning
+        // index.html for asset / runtime-file requests. NavigationRoute
+        // already defaults to matching only `request.mode === 'navigate'`,
+        // but some older SW installs had caches poisoned by the SPA
+        // fallback, so this belt-and-braces ensures we never do it again.
+        navigateFallbackDenylist: [
+          /^\/assets\//,
+          /^\/tts-runtime\//,
+          /^\/api\//,
+          /\.(wasm|mjs|onnx|data)$/,
+        ],
         runtimeCaching: [
           {
             // Gutendex search responses — handy for "recently browsed" offline.

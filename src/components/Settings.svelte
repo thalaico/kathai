@@ -54,6 +54,37 @@
     // is a separate .onnx file. Reuses OPFS cache if already downloaded.
     await enablePiper(id);
   }
+
+  /**
+   * Nuclear reset: wipes all TTS-related caches (service worker
+   * cache entries for /tts-runtime/, /assets/, piper-voices, and
+   * OPFS voice storage), unregisters service workers, then reloads.
+   * Used as an escape hatch when a broken cache is persisting.
+   */
+  async function hardResetTTS() {
+    if (!confirm('wipe neural voice cache and reload?')) return;
+    try {
+      if ('caches' in window) {
+        const names = await caches.keys();
+        await Promise.all(names.map((n) => caches.delete(n)));
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      // OPFS where Piper stores voice .onnx files.
+      try {
+        const root = await navigator.storage.getDirectory();
+        const dir = await (root as any).getDirectoryHandle('piper');
+        await (dir as any).remove({ recursive: true });
+      } catch {
+        /* no directory yet */
+      }
+    } catch (err) {
+      console.error('hardResetTTS failed:', err);
+    }
+    location.reload();
+  }
 </script>
 
 {#if open}
@@ -155,6 +186,17 @@
         <p class="hint">
           clearing your browser data will reset kathai completely.
         </p>
+      </section>
+
+      <hr class="rule" />
+
+      <section class="diagnostics">
+        <h3>diagnostics</h3>
+        <p class="hint">
+          if neural voice won't load or play, this wipes the downloaded
+          model and service worker caches and reloads.
+        </p>
+        <button class="secondary" onclick={hardResetTTS}>reset neural voice cache</button>
       </section>
     </div>
   </div>
