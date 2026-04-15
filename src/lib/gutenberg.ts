@@ -15,6 +15,7 @@ export interface GutenbergBook {
   languages: string[];
   downloadCount: number;
   epubUrl?: string;
+  coverUrl?: string;
 }
 
 interface GutendexAuthor {
@@ -54,6 +55,14 @@ function pickEpubUrl(formats: Record<string, string>): string | undefined {
   return epubKey ? formats[epubKey] : undefined;
 }
 
+function pickCoverUrl(formats: Record<string, string>): string | undefined {
+  // Gutenberg serves cover thumbnails as image/jpeg. Prefer the medium
+  // size (small, but reasonable quality for a list item).
+  const keys = Object.keys(formats);
+  const jpegKey = keys.find((k) => k.startsWith('image/jpeg'));
+  return jpegKey ? formats[jpegKey] : undefined;
+}
+
 function normalize(b: GutendexBook): GutenbergBook {
   return {
     id: b.id,
@@ -62,6 +71,7 @@ function normalize(b: GutendexBook): GutenbergBook {
     languages: b.languages,
     downloadCount: b.download_count,
     epubUrl: pickEpubUrl(b.formats),
+    coverUrl: pickCoverUrl(b.formats),
   };
 }
 

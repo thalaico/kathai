@@ -114,6 +114,19 @@
     <ul class="results">
       {#each results as book (book.id)}
         <li>
+          {#if book.coverUrl}
+            <img
+              class="cover"
+              src={book.coverUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerpolicy="no-referrer"
+              onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+            />
+          {:else}
+            <div class="cover placeholder" aria-hidden="true"></div>
+          {/if}
           <div class="info">
             <span class="title">{book.title}</span>
             {#if book.authors.length > 0}
@@ -253,8 +266,8 @@
 
   .results li {
     display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
+    align-items: center;
+    gap: 0.85rem;
     padding: 0.75rem 0;
     border-bottom: 1px dashed var(--rule);
   }
@@ -263,10 +276,35 @@
     border-top: 1px dashed var(--rule);
   }
 
+  .cover {
+    flex-shrink: 0;
+    width: 2.8rem;
+    height: 4rem;
+    object-fit: cover;
+    border: 1px solid var(--rule);
+    box-shadow: 2px 2px 0 var(--paper-edge);
+    filter: sepia(0.12) saturate(0.9) brightness(0.98);
+    background: var(--paper-edge);
+  }
+
+  .cover.placeholder {
+    background:
+      repeating-linear-gradient(
+        45deg,
+        var(--paper-edge),
+        var(--paper-edge) 3px,
+        transparent 3px,
+        transparent 6px
+      );
+  }
+
   .info {
     flex: 1;
     line-height: 1.5;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
   }
 
   .title {
