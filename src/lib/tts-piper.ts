@@ -17,6 +17,18 @@ import type { TTSEngine, TTSVoice, SpeakOptions } from './tts';
 export const PIPER_DEFAULT_VOICE = 'en_US-hfc_female-medium';
 
 /**
+ * Paths to the runtime files we vendor under /tts-runtime/ via
+ * vite-plugin-static-copy. We override the package defaults (which
+ * point at cdnjs files that don't exist for ORT 1.18.0) so inference
+ * works at all, and so the service worker can cache them for offline.
+ */
+const PIPER_WASM_PATHS = {
+  onnxWasm: '/tts-runtime/onnx/',
+  piperData: '/tts-runtime/piper/piper_phonemize.data',
+  piperWasm: '/tts-runtime/piper/piper_phonemize.wasm',
+};
+
+/**
  * Curated list of English voices. The full Piper catalog has 60+
  * voices across ~40 languages but exposing them all here would be
  * noise; users can request specific voices in Settings later.
@@ -107,7 +119,10 @@ export class PiperEngine implements TTSEngine {
           }
         });
         this.emit({ type: 'loading', message: 'Initializing session…' });
-        this.session = await TtsSession.create({ voiceId });
+        this.session = await TtsSession.create({
+          voiceId,
+          wasmPaths: PIPER_WASM_PATHS,
+        });
         if (this.session.waitReady && this.session.waitReady !== true) {
           await this.session.waitReady;
         }

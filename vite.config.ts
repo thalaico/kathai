@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
+import { viteStaticCopy } from 'vite-plugin-static-copy'
 import { fileURLToPath } from 'node:url'
 
 /**
@@ -65,6 +66,26 @@ export default defineConfig({
   plugins: [
     svelte(),
     devEpubProxy(),
+    // Vendor the Piper TTS runtime (ORT + phonemizer wasm+data) out of
+    // node_modules and serve it at /tts-runtime/ in both dev and build.
+    // We ship our own copies instead of relying on the defaults that
+    // @mintplex-labs/piper-tts-web hard-codes at cdnjs (they point at
+    // files that don't exist for ORT 1.18.0). Local hosting also means
+    // the service worker can cache them for offline use.
+    viteStaticCopy({
+      targets: [
+        {
+          src: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.{mjs,wasm}',
+          dest: 'tts-runtime/onnx',
+          rename: { stripBase: true },
+        },
+        {
+          src: 'node_modules/@diffusionstudio/piper-wasm/build/piper_phonemize.{js,wasm,data}',
+          dest: 'tts-runtime/piper',
+          rename: { stripBase: true },
+        },
+      ],
+    }),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icon.svg'],
@@ -91,8 +112,10 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Cache the app shell + assets up to 5 MB.
-        globPatterns: ['**/*.{js,css,html,svg,woff,woff2}'],
+        // Cache the app shell + most assets. WASM and .data files are
+        // too big for precache (5 MB limit below) and will be handled
+        // by the runtime cache rules instead.
+        globPatterns: ['**/*.{js,css,html,svg,woff,woff2,mjs}'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         runtimeCaching: [
           {
@@ -111,6 +134,26 @@ export default defineConfig({
             options: {
               cacheName: 'gutenberg-epubs-v1',
               expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 90 },
+            },
+          },
+          {
+            // Vendored TTS runtime: ORT wasm + Piper phonemizer data.
+            urlPattern: ({ url }) => url.pathname.startsWith('/tts-runtime/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'tts-runtime-v1',
+              expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 },
+            },
+          },
+          {
+            // Piper voice model downloads (fetched from HuggingFace).
+            // CacheFirst with a long TTL — the voice.onnx file is
+            // content-addressed and won't change.
+            urlPattern: /^https:\/\/huggingface\.co\/.*\.(onnx|json)/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'piper-voices-v1',
+              expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
             },
           },
         ],
