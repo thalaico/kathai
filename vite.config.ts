@@ -117,6 +117,13 @@ export default defineConfig({
         // by the runtime cache rules instead.
         globPatterns: ['**/*.{js,css,html,svg,woff,woff2,mjs}'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        // Drop any caches from earlier SW versions on activation. The
+        // runtime cache *names* were bumped too, so poisoned entries
+        // from the previous deploy are wiped the moment this SW takes
+        // over.
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true,
         runtimeCaching: [
           {
             // Gutendex search responses — handy for "recently browsed" offline.
@@ -138,21 +145,29 @@ export default defineConfig({
           },
           {
             // Vendored TTS runtime: ORT wasm + Piper phonemizer data.
+            // StaleWhileRevalidate + cacheableResponse:{statuses:[200]}
+            // prevents cache poisoning if a deploy was briefly missing
+            // these files — a bad (HTML) response won't get cached, and
+            // each hit re-validates in the background so any poisoned
+            // entry is replaced on the next request.
             urlPattern: ({ url }) => url.pathname.startsWith('/tts-runtime/'),
-            handler: 'CacheFirst',
+            handler: 'StaleWhileRevalidate',
             options: {
-              cacheName: 'tts-runtime-v1',
+              cacheName: 'tts-runtime-v2',
+              cacheableResponse: { statuses: [200] },
               expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 },
             },
           },
           {
-            // Piper voice model downloads (fetched from HuggingFace).
-            // CacheFirst with a long TTL — the voice.onnx file is
-            // content-addressed and won't change.
+            // Piper voice model downloads from HuggingFace. The .onnx
+            // blobs are content-addressed via HF LFS and won't change,
+            // so CacheFirst is still appropriate once a good response
+            // lands in cache.
             urlPattern: /^https:\/\/huggingface\.co\/.*\.(onnx|json)/,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'piper-voices-v1',
+              cacheName: 'piper-voices-v2',
+              cacheableResponse: { statuses: [200] },
               expiration: { maxEntries: 10, maxAgeSeconds: 60 * 60 * 24 * 365 },
             },
           },
