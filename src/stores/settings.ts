@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 import { getFromDB, saveToDB } from '$lib/db';
 
-export type EngineType = 'web-speech' | 'kitten';
+export type EngineType = 'web-speech' | 'piper';
 
 export interface Settings {
   engine: EngineType;
@@ -19,9 +19,19 @@ export const settings = writable<Settings>({ ...DEFAULTS });
 let loaded = false;
 
 export async function loadSettings(): Promise<Settings> {
-  const row = await getFromDB<{ key: string } & Settings>('settings', KEY);
-  const merged: Settings = { ...DEFAULTS, ...(row ?? {}) };
+  const row = await getFromDB<{ key: string; engine?: string; voiceId?: string }>(
+    'settings',
+    KEY,
+  );
+  const merged: Settings = { ...DEFAULTS, ...((row ?? {}) as Partial<Settings>) };
   delete (merged as any).key;
+
+  // Migrate any legacy 'kitten' engine setting from previous builds.
+  if ((merged.engine as string) === 'kitten') {
+    merged.engine = 'web-speech';
+    merged.voiceId = undefined;
+  }
+
   settings.set(merged);
   loaded = true;
   return merged;

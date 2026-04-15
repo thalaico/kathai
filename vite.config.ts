@@ -124,7 +124,4 @@ export default defineConfig({
       $components: fileURLToPath(new URL('./src/components', import.meta.url)),
     },
   },
-  optimizeDeps: {
-    exclude: ['onnxruntime-web'],
-  },
 })

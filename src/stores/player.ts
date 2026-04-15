@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store';
-import { getTTSEngine, getWebSpeechEngine, markKittenBroken } from '$lib/tts';
+import { getTTSEngine, getWebSpeechEngine, markNeuralBroken } from '$lib/tts';
 import { settings } from '$stores/settings';
 import { chunkBySentences } from '$lib/text-chunker';
 
@@ -31,10 +31,10 @@ function isAbort(err: unknown): boolean {
 
 /**
  * Speak one chunk with engine selection + first-class fallback.
- * If the active engine is KittenTTS and it throws a non-abort error
- * (network hiccup, inference NaN, etc.), we mark Kitten broken for
- * the remainder of the session and retry the same chunk with Web
- * Speech so the listener experience doesn't drop.
+ * If the active engine is a neural one and it throws a non-abort
+ * error, we mark it broken for the rest of the session and retry
+ * the same chunk with Web Speech so the listener experience doesn't
+ * drop mid-chapter.
  */
 async function speakChunk(
   text: string,
@@ -43,7 +43,7 @@ async function speakChunk(
 ): Promise<void> {
   const engine = getTTSEngine();
   const voiceId =
-    engine.name === 'kitten'
+    engine.name === 'piper'
       ? get(settings).voiceId
       : get(playerState).voiceId;
 
@@ -51,10 +51,8 @@ async function speakChunk(
     await engine.speak(text, { rate, voiceId, signal });
   } catch (err) {
     if (isAbort(err)) throw err;
-    if (engine.name === 'kitten') {
-      markKittenBroken((err as Error).message ?? String(err));
-      // Retry the same chunk with Web Speech; no recursive fallback —
-      // if Web Speech also fails, that error propagates out.
+    if (engine.name !== 'web-speech') {
+      markNeuralBroken((err as Error).message ?? String(err));
       await getWebSpeechEngine().speak(text, { rate, signal });
       return;
     }

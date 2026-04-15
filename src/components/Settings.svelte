@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { settings, updateSettings } from '$stores/settings';
-  import { getKittenEngine } from '$lib/tts';
+  import { getPiperEngine } from '$lib/tts';
+  import type { TTSVoice } from '$lib/tts';
 
   interface Props {
     open: boolean;
@@ -16,16 +17,16 @@
     | { type: 'ready' }
     | { type: 'error'; error: string }
   >({ type: 'idle' });
-  let voices = $state<string[]>([]);
+  let voices = $state<TTSVoice[]>([]);
   let unsubStatus: (() => void) | null = null;
 
   onMount(() => {
-    const engine = getKittenEngine();
+    const engine = getPiperEngine();
+    // listVoices is synchronous for Piper (curated static list), so we
+    // can populate it up front without waiting for 'ready'.
+    engine.listVoices().then((v) => (voices = v));
     unsubStatus = engine.subscribeStatus((s) => {
       status = s;
-      if (s.type === 'ready') {
-        engine.listVoices().then((v) => (voices = v.map((x) => x.id)));
-      }
     });
   });
 
@@ -33,22 +34,25 @@
     unsubStatus?.();
   });
 
-  async function enableKitten() {
-    const engine = getKittenEngine();
+  async function enablePiper(voiceId?: string) {
+    const engine = getPiperEngine();
+    const targetVoice = voiceId ?? $settings.voiceId ?? voices[0]?.id;
     try {
-      await engine.load();
-      await updateSettings({ engine: 'kitten' });
+      await engine.load(targetVoice);
+      await updateSettings({ engine: 'piper', voiceId: targetVoice });
     } catch (err) {
       console.error(err);
     }
   }
 
-  async function disableKitten() {
+  async function disablePiper() {
     await updateSettings({ engine: 'web-speech' });
   }
 
   async function pickVoice(id: string) {
-    await updateSettings({ voiceId: id });
+    // Switching voice requires a fresh load() because each Piper voice
+    // is a separate .onnx file. Reuses OPFS cache if already downloaded.
+    await enablePiper(id);
   }
 </script>
 
@@ -82,53 +86,59 @@
           {#if $settings.engine === 'web-speech'}
             using your device's built-in voice. zero download, but quality varies.
           {:else if status.type === 'ready'}
-            using kittentts — neural voice, ~23 MB cached on your device.
+            using piper — on-device neural voice, cached for offline use.
           {:else}
-            kittentts is a small neural tts model (~23 MB). download once, runs fully on your device, works offline after.
+            piper is a neural tts model. one-time download (~60 MB per voice), runs fully on your device, works offline after.
           {/if}
         </p>
 
         {#if status.type === 'error'}
-          <p class="error">kittentts error:</p>
+          <p class="error">piper error:</p>
           <pre class="error-detail">{status.error}</pre>
-          <button class="primary" onclick={enableKitten}>try again</button>
-          <button class="secondary" onclick={disableKitten}>
+          <button class="primary" onclick={() => enablePiper()}>try again</button>
+          <button class="secondary" onclick={disablePiper}>
             use device voice instead
           </button>
         {:else if status.type === 'loading'}
           <p class="status">{status.message}</p>
         {:else if status.type === 'ready'}
-          {#if voices.length > 0}
-            <label class="field">
-              <span>voice</span>
-              <select
-                value={$settings.voiceId ?? voices[0]}
-                onchange={(e) => pickVoice((e.target as HTMLSelectElement).value)}
-              >
-                {#each voices as v}
-                  <option value={v}>{v}</option>
-                {/each}
-              </select>
-            </label>
-          {:else}
-            <p class="status">loading voices…</p>
-          {/if}
-          <button class="secondary" onclick={disableKitten}>
+          <label class="field">
+            <span>voice</span>
+            <select
+              value={$settings.voiceId ?? voices[0]?.id}
+              onchange={(e) => pickVoice((e.target as HTMLSelectElement).value)}
+            >
+              {#each voices as v}
+                <option value={v.id}>{v.label}</option>
+              {/each}
+            </select>
+          </label>
+          <button class="secondary" onclick={disablePiper}>
             use device voice instead
           </button>
-        {:else if $settings.engine === 'kitten'}
-          <!-- Kitten was selected but engine is idle (fresh session).
-               Offer to resume the load, which will hit the IndexedDB cache
-               and come back 'ready' almost instantly. -->
-          <button class="primary" onclick={enableKitten}>
-            enable kittentts (already downloaded)
+        {:else if $settings.engine === 'piper'}
+          <!-- Piper was selected but engine is idle (fresh session).
+               Resume the load; OPFS cache makes this fast. -->
+          <button class="primary" onclick={() => enablePiper()}>
+            enable piper (already downloaded)
           </button>
-          <button class="secondary" onclick={disableKitten}>
+          <button class="secondary" onclick={disablePiper}>
             use device voice instead
           </button>
         {:else}
-          <button class="primary" onclick={enableKitten}>
-            download kittentts (~23 MB)
+          <label class="field">
+            <span>voice</span>
+            <select
+              value={voices[0]?.id}
+              onchange={(e) => pickVoice((e.target as HTMLSelectElement).value)}
+            >
+              {#each voices as v}
+                <option value={v.id}>{v.label}</option>
+              {/each}
+            </select>
+          </label>
+          <button class="primary" onclick={() => enablePiper()}>
+            download piper (~60 MB)
           </button>
         {/if}
       </section>
@@ -139,9 +149,8 @@
         <h3>privacy</h3>
         <p>
           kathai has no server, no account, no sync, no telemetry. everything —
-          your books, your reading progress, your settings, the downloaded
-          kittentts model — lives in your browser's indexeddb on this device
-          only.
+          your books, your reading progress, your settings, any downloaded
+          neural voice — lives in your browser's storage on this device only.
         </p>
         <p class="hint">
           clearing your browser data will reset kathai completely.

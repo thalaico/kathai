@@ -1,0 +1,251 @@
+/*
+ * Piper TTS — VITS-based on-device neural voice via
+ * @mintplex-labs/piper-tts-web.
+ *
+ * Why this exists alongside KittenTTS: VITS (Piper) is a single-stage
+ * architecture that synthesizes noticeably faster than StyleTTS2
+ * (Kitten) on WASM CPU, at the cost of a ~60 MB download per voice
+ * (vs Kitten's ~23 MB). The package wraps an internal Web Worker and
+ * caches models in OPFS, so integration here is mostly engine plumbing
+ * plus the same streaming-chunk playback we already use for Kitten.
+ */
+
+import { TtsSession, download } from '@mintplex-labs/piper-tts-web';
+import { chunkBySentences } from './text-chunker';
+import type { TTSEngine, TTSVoice, SpeakOptions } from './tts';
+
+export const PIPER_DEFAULT_VOICE = 'en_US-hfc_female-medium';
+
+/**
+ * Curated list of English voices. The full Piper catalog has 60+
+ * voices across ~40 languages but exposing them all here would be
+ * noise; users can request specific voices in Settings later.
+ */
+const VOICE_CATALOG: TTSVoice[] = [
+  { id: 'en_US-hfc_female-medium', label: 'hfc — us, female', lang: 'en-US' },
+  { id: 'en_US-hfc_male-medium', label: 'hfc — us, male', lang: 'en-US' },
+  { id: 'en_US-amy-medium', label: 'amy — us, female', lang: 'en-US' },
+  { id: 'en_US-ryan-medium', label: 'ryan — us, male', lang: 'en-US' },
+  { id: 'en_US-lessac-medium', label: 'lessac — us, female', lang: 'en-US' },
+  { id: 'en_US-libritts_r-medium', label: 'libritts — us, multi', lang: 'en-US' },
+  { id: 'en_GB-cori-medium', label: 'cori — gb, female', lang: 'en-GB' },
+  { id: 'en_GB-alan-medium', label: 'alan — gb, male', lang: 'en-GB' },
+];
+
+type LoadStatus =
+  | { type: 'idle' }
+  | { type: 'loading'; message: string }
+  | { type: 'ready' }
+  | { type: 'error'; error: string };
+
+export class PiperEngine implements TTSEngine {
+  readonly name = 'piper';
+
+  private session: TtsSession | null = null;
+  private audioCtx: AudioContext | null = null;
+  private currentSource: AudioBufferSourceNode | null = null;
+  private status: LoadStatus = { type: 'idle' };
+  private readyPromise: Promise<void> | null = null;
+  private loadedVoice: string | null = null;
+  private onStatus: ((s: LoadStatus) => void) | null = null;
+  private nextReqId = 0;
+  /** Bumped on every new speak() / abort so in-flight predicts can check
+      whether they've been superseded between awaits. */
+  private currentReqId = 0;
+
+  isAvailable(): boolean {
+    return this.status.type === 'ready';
+  }
+
+  subscribeStatus(fn: (s: LoadStatus) => void): () => void {
+    this.onStatus = fn;
+    fn(this.status);
+    return () => {
+      if (this.onStatus === fn) this.onStatus = null;
+    };
+  }
+
+  private emit(s: LoadStatus) {
+    this.status = s;
+    this.onStatus?.(s);
+  }
+
+  markFailed(reason: string) {
+    this.emit({ type: 'error', error: reason });
+  }
+
+  /**
+   * Download + initialize a voice. Safe to call multiple times; will
+   * reload the session when switching voices. After a failed load the
+   * next call tears down and retries cleanly.
+   */
+  load(voiceId: string = PIPER_DEFAULT_VOICE): Promise<void> {
+    // Already loaded this exact voice and not in error state → reuse.
+    if (
+      this.readyPromise &&
+      this.status.type !== 'error' &&
+      this.loadedVoice === voiceId
+    ) {
+      return this.readyPromise;
+    }
+
+    // Switching voice or retrying → discard old session.
+    this.session = null;
+    this.readyPromise = null;
+
+    this.readyPromise = (async () => {
+      try {
+        this.emit({ type: 'loading', message: 'Preparing piper…' });
+        await download(voiceId, (progress) => {
+          if (progress.total > 0) {
+            const pct = Math.round((progress.loaded * 100) / progress.total);
+            const mb = (progress.loaded / 1024 / 1024).toFixed(1);
+            this.emit({
+              type: 'loading',
+              message: `Downloading voice… ${pct}% (${mb} MB)`,
+            });
+          }
+        });
+        this.emit({ type: 'loading', message: 'Initializing session…' });
+        this.session = await TtsSession.create({ voiceId });
+        if (this.session.waitReady && this.session.waitReady !== true) {
+          await this.session.waitReady;
+        }
+        this.loadedVoice = voiceId;
+        this.emit({ type: 'ready' });
+      } catch (err) {
+        const msg = (err as Error).message ?? String(err);
+        this.emit({ type: 'error', error: msg });
+        throw err;
+      }
+    })();
+
+    return this.readyPromise;
+  }
+
+  async listVoices(): Promise<TTSVoice[]> {
+    return VOICE_CATALOG;
+  }
+
+  getLoadedVoice(): string | null {
+    return this.loadedVoice;
+  }
+
+  speak(text: string, opts: SpeakOptions = {}): Promise<void> {
+    if (!this.session || !this.isAvailable()) {
+      return Promise.reject(new Error('Piper not loaded'));
+    }
+    const session = this.session;
+    if (!this.audioCtx) {
+      this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    const ctx = this.audioCtx;
+    const reqId = ++this.nextReqId;
+    this.currentReqId = reqId;
+    const playbackRate = Math.max(0.25, Math.min(4, opts.rate ?? 1));
+
+    return new Promise<void>(async (resolve, reject) => {
+      let settled = false;
+      let playChain: Promise<void> = Promise.resolve();
+
+      const finish = (err?: Error) => {
+        if (settled) return;
+        settled = true;
+        opts.signal?.removeEventListener('abort', onAbort);
+        if (err) reject(err);
+        else resolve();
+      };
+
+      const onAbort = () => {
+        // Bump the sentinel so the synth loop short-circuits at the
+        // next boundary.
+        this.currentReqId = -1;
+        try {
+          this.currentSource?.stop();
+        } catch {
+          /* already stopped */
+        }
+        this.currentSource = null;
+        finish(new DOMException('aborted', 'AbortError'));
+      };
+
+      if (opts.signal?.aborted) {
+        finish(new DOMException('aborted', 'AbortError'));
+        return;
+      }
+      opts.signal?.addEventListener('abort', onAbort);
+
+      const chunks = chunkBySentences(text, 40);
+      if (chunks.length === 0) {
+        finish();
+        return;
+      }
+
+      try {
+        for (let i = 0; i < chunks.length; i++) {
+          if (this.currentReqId !== reqId) return;
+          // Run inference — session has its own Worker, so this doesn't
+          // block the main thread.
+          const blob = await session.predict(chunks[i]);
+          if (this.currentReqId !== reqId) return;
+
+          // Decode the WAV and queue playback.
+          const arrayBuf = await blob.arrayBuffer();
+          const audioBuf = await ctx.decodeAudioData(arrayBuf);
+          if (this.currentReqId !== reqId) return;
+
+          playChain = playChain.then(
+            () =>
+              new Promise<void>((res, rej) => {
+                if (this.currentReqId !== reqId) {
+                  res();
+                  return;
+                }
+                try {
+                  const src = ctx.createBufferSource();
+                  src.buffer = audioBuf;
+                  src.playbackRate.value = playbackRate;
+                  src.connect(ctx.destination);
+                  this.currentSource = src;
+                  src.onended = () => {
+                    if (this.currentSource === src) this.currentSource = null;
+                    res();
+                  };
+                  if (ctx.state === 'suspended') {
+                    ctx.resume().then(() => src.start(), rej);
+                  } else {
+                    src.start();
+                  }
+                } catch (err) {
+                  rej(err as Error);
+                }
+              }),
+          );
+        }
+        // Wait for all queued playback to finish, then resolve.
+        await playChain;
+        if (this.currentReqId === reqId) finish();
+      } catch (err) {
+        if (!settled) finish(err as Error);
+      }
+    });
+  }
+
+  cancel(): void {
+    this.currentReqId = -1;
+    try {
+      this.currentSource?.stop();
+    } catch {
+      /* already stopped */
+    }
+    this.currentSource = null;
+  }
+
+  pause(): void {
+    this.audioCtx?.suspend().catch(() => {});
+  }
+
+  resume(): void {
+    this.audioCtx?.resume().catch(() => {});
+  }
+}

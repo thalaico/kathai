@@ -11,9 +11,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
   },
   "dependencies": {
-    "epubjs": "^0.3.93",
-    "onnxruntime-web": "^1.20.1",
-    "phonemizer": "^1.2.1"
+    "@mintplex-labs/piper-tts-web": "^1.0.4",
+    "epubjs": "^0.3.93"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",

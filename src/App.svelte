@@ -6,7 +6,7 @@
   import { currentBook, loadBooksFromDB } from '$stores/books';
   import { loadSettings, settings } from '$stores/settings';
   import { installRouter } from '$lib/router';
-  import { getKittenEngine } from '$lib/tts';
+  import { getPiperEngine } from '$lib/tts';
 
   onMount(async () => {
     try {
@@ -18,13 +18,14 @@
     // /book/gutenberg-1342/3 resolve against real data.
     installRouter();
 
-    // If the user previously enabled KittenTTS, quietly re-load it in
-    // the background. The model bytes are already in IndexedDB so this
-    // usually completes in well under a second without any network.
-    if (get(settings).engine === 'kitten') {
-      getKittenEngine()
-        .load()
-        .catch((err) => console.warn('[kathai] KittenTTS auto-load failed:', err));
+    // If the user previously enabled Piper, quietly re-load it in
+    // the background. The model is already in OPFS so this is
+    // usually a fast init, no network.
+    const cfg = get(settings);
+    if (cfg.engine === 'piper') {
+      getPiperEngine()
+        .load(cfg.voiceId)
+        .catch((err) => console.warn('[kathai] Piper auto-load failed:', err));
     }
   });
 </script>

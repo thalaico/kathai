@@ -1,9 +1,15 @@
 /*
  * TTS engine abstraction.
  *
- * Phase 2 ships with a SpeechSynthesis-backed engine — genuinely on-device,
- * zero download, works everywhere. Phase 2.5 will add a KittenTTS/ONNX engine
- * behind the same interface.
+ * Two engines ship today:
+ *   - WebSpeechEngine: the OS's native SpeechSynthesis. Zero download,
+ *     instant, works everywhere. Default.
+ *   - PiperEngine: on-device neural VITS via @mintplex-labs/piper-tts-web.
+ *     ~60 MB one-time download per voice, much better quality, cached
+ *     in OPFS so subsequent visits skip the network entirely.
+ *
+ * Both implement the same TTSEngine interface so the player doesn't
+ * care which one is active.
  */
 
 export interface TTSVoice {
@@ -137,17 +143,17 @@ export class WebSpeechEngine implements TTSEngine {
 }
 
 import { get } from 'svelte/store';
-import { KittenEngine } from './tts-kitten';
+import { PiperEngine } from './tts-piper';
 import { settings } from '$stores/settings';
 
 let _webSpeech: WebSpeechEngine | null = null;
-let _kitten: KittenEngine | null = null;
+let _piper: PiperEngine | null = null;
 /**
- * Sticky flag flipped if KittenTTS ever throws a non-abort error during
- * synthesis. Prevents us from retrying a broken engine forever; the user
- * can reset it by choosing a different engine in Settings.
+ * Sticky flag flipped if Piper ever throws a non-abort error during
+ * synthesis. Prevents retrying a broken engine forever; the user can
+ * reset it by reloading the page or toggling engines in Settings.
  */
-let _kittenBroken = false;
+let _piperBroken = false;
 
 export function getWebSpeechEngine(): WebSpeechEngine {
   if (!_webSpeech) _webSpeech = new WebSpeechEngine();
@@ -155,37 +161,36 @@ export function getWebSpeechEngine(): WebSpeechEngine {
 }
 
 /**
- * Returns the KittenTTS engine singleton. Does NOT auto-load the model —
- * callers are responsible for .load() when the user opts in via Settings.
- * The heavy inference code lives in the worker file and only gets fetched
- * when KittenEngine.load() actually constructs the Worker.
+ * Returns the Piper engine singleton. Does NOT auto-load the model —
+ * callers are responsible for .load() when the user opts in via
+ * Settings or on app startup if the setting is persisted.
  */
-export function getKittenEngine(): KittenEngine {
-  if (!_kitten) _kitten = new KittenEngine();
-  return _kitten;
+export function getPiperEngine(): PiperEngine {
+  if (!_piper) _piper = new PiperEngine();
+  return _piper;
 }
 
-/** Mark KittenTTS as broken for the rest of this session. */
-export function markKittenBroken(reason?: string): void {
-  _kittenBroken = true;
-  if (reason) console.warn('[kathai] KittenTTS disabled for session:', reason);
-  if (_kitten && reason) _kitten.markFailed(reason);
+/** Mark the current neural engine as broken for the rest of this session. */
+export function markNeuralBroken(reason?: string): void {
+  _piperBroken = true;
+  if (reason) console.warn('[kathai] neural TTS disabled for session:', reason);
+  if (_piper && reason) _piper.markFailed(reason);
 }
 
-export function isKittenBroken(): boolean {
-  return _kittenBroken;
+export function isNeuralBroken(): boolean {
+  return _piperBroken;
 }
 
 /**
- * The active engine. Honors the user's setting, but falls back to Web
+ * The active engine. Honors the user's setting, falls back to Web
  * Speech when:
- *   - the user hasn't opted into Kitten
- *   - Kitten hasn't finished loading yet
- *   - Kitten threw a non-abort error earlier this session
+ *   - the user hasn't opted into a neural engine
+ *   - the selected neural engine hasn't finished loading yet
+ *   - the neural engine threw a non-abort error earlier this session
  */
 export function getTTSEngine(): TTSEngine {
-  if (_kittenBroken) return getWebSpeechEngine();
+  if (_piperBroken) return getWebSpeechEngine();
   const cfg = get(settings);
-  if (cfg.engine === 'kitten' && _kitten && _kitten.isAvailable()) return _kitten;
+  if (cfg.engine === 'piper' && _piper && _piper.isAvailable()) return _piper;
   return getWebSpeechEngine();
 }
