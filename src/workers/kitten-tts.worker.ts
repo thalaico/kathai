@@ -15,8 +15,14 @@
 
 /// <reference lib="webworker" />
 
+// Visible in devtools when the worker script parses. If you don't see
+// this line in the console, the worker blew up during module init.
+console.log('[kathai-tts-worker] booting');
+
 import * as ort from 'onnxruntime-web';
 import { phonemize } from 'phonemizer';
+
+console.log('[kathai-tts-worker] modules imported');
 
 // ─────────────────────────────────────────────────────────────
 // Vocab + tokenizer (character-level, IPA + ASCII)

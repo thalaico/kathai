@@ -97,22 +97,32 @@
           </button>
         {:else if status.type === 'loading'}
           <p class="status">{status.message}</p>
-        {:else if $settings.engine === 'web-speech'}
-          <button class="primary" onclick={enableKitten}>
-            download kittentts (~23 MB)
+        {:else if status.type === 'ready'}
+          {#if voices.length > 0}
+            <label class="field">
+              <span>voice</span>
+              <select
+                value={$settings.voiceId ?? voices[0]}
+                onchange={(e) => pickVoice((e.target as HTMLSelectElement).value)}
+              >
+                {#each voices as v}
+                  <option value={v}>{v}</option>
+                {/each}
+              </select>
+            </label>
+          {:else}
+            <p class="status">loading voices…</p>
+          {/if}
+          <button class="secondary" onclick={disableKitten}>
+            use device voice instead
           </button>
-        {:else if status.type === 'ready' && voices.length > 0}
-          <label class="field">
-            <span>voice</span>
-            <select
-              value={$settings.voiceId ?? voices[0]}
-              onchange={(e) => pickVoice((e.target as HTMLSelectElement).value)}
-            >
-              {#each voices as v}
-                <option value={v}>{v}</option>
-              {/each}
-            </select>
-          </label>
+        {:else if $settings.engine === 'kitten'}
+          <!-- Kitten was selected but engine is idle (fresh session).
+               Offer to resume the load, which will hit the IndexedDB cache
+               and come back 'ready' almost instantly. -->
+          <button class="primary" onclick={enableKitten}>
+            enable kittentts (already downloaded)
+          </button>
           <button class="secondary" onclick={disableKitten}>
             use device voice instead
           </button>
