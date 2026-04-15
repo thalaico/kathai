@@ -12,10 +12,12 @@ import type { TTSEngine, TTSVoice, SpeakOptions } from './tts';
 
 /**
  * Which KittenTTS variant to download. All paths below resolve against
- * huggingface.co/<repoId>/resolve/main/. The default is the 22 MB
- * nano-0.1 build — smallest viable neural voice.
+ * huggingface.co/<repoId>/resolve/main/. KittenML/kitten-tts-nano-0.8-int8
+ * is the smallest viable neural voice with the voices.npz layout —
+ * 23 MB model + 3 MB voices + 8 voices (Bella, Jasper, Luna, Bruno,
+ * Rosie, Hugo, Kiki, Leo).
  */
-export const KITTEN_REPO = 'onnx-community/kitten-tts-nano-0.1-ONNX';
+export const KITTEN_REPO = 'KittenML/kitten-tts-nano-0.8-int8';
 
 type LoadStatus =
   | { type: 'idle' }
@@ -60,9 +62,27 @@ export class KittenEngine implements TTSEngine {
     this.onStatus?.(s);
   }
 
-  /** Start loading the model. Safe to call multiple times. */
+  /**
+   * Start loading the model. If a load is already in progress or succeeded,
+   * returns the existing promise. After a failed load, a fresh call will
+   * tear down the old worker and retry cleanly.
+   */
   load(): Promise<void> {
-    if (this.readyPromise) return this.readyPromise;
+    // In flight or already successful → reuse the existing promise.
+    if (this.readyPromise && this.status.type !== 'error') {
+      return this.readyPromise;
+    }
+
+    // Retry after a prior failure: tear down and start over.
+    if (this.worker) {
+      try {
+        this.worker.terminate();
+      } catch {
+        /* ignore */
+      }
+      this.worker = null;
+    }
+    this.readyPromise = null;
 
     this.readyPromise = new Promise<void>((resolve, reject) => {
       try {
