@@ -79,8 +79,13 @@
   let pageHeight = $state(0);
   let totalPages = $state(1);
   let currentPage = $state(0);
-  /** Used so chapter changes driven by "prev from page 0" land on the last page. */
-  let pendingPageTarget: 'first' | 'last' = 'first';
+  /**
+   * Tells the next measurement where to land:
+   *   'first' — chapter just advanced (or initial mount), start at page 0
+   *   'last'  — chapter just receded via prev, start at the last page
+   *   'keep'  — viewport resize, preserve currentPage (clamped)
+   */
+  let pendingPageTarget: 'first' | 'last' | 'keep' = 'first';
 
   async function measure() {
     if (!pagesContainer || !articleEl) return;
@@ -105,12 +110,15 @@
     const contentHeight = articleEl.scrollHeight;
     totalPages = Math.max(1, Math.ceil(contentHeight / newPageHeight));
 
-    if (pendingPageTarget === 'last') {
-      currentPage = totalPages - 1;
-      pendingPageTarget = 'first';
-    } else if (currentPage >= totalPages) {
+    if (pendingPageTarget === 'first') {
       currentPage = 0;
+    } else if (pendingPageTarget === 'last') {
+      currentPage = totalPages - 1;
+    } else if (currentPage >= totalPages) {
+      // 'keep' (viewport resize): clamp if we now overflow.
+      currentPage = totalPages - 1;
     }
+    pendingPageTarget = 'keep';
   }
 
   // Re-measure whenever the rendered text changes.
