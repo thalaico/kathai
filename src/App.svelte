@@ -3,11 +3,12 @@
   import Library from '$components/Library.svelte';
   import Reader from '$components/Reader.svelte';
   import { currentBook, loadBooksFromDB } from '$stores/books';
+  import { loadSettings } from '$stores/settings';
   import { installRouter } from '$lib/router';
 
   onMount(async () => {
     try {
-      await loadBooksFromDB();
+      await Promise.all([loadBooksFromDB(), loadSettings()]);
     } catch (err) {
       console.error(err);
     }

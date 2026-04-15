@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
-import { getTTSEngine } from '$lib/tts';
+import { getTTSEngine, getWebSpeechEngine, markKittenBroken } from '$lib/tts';
+import { settings } from '$stores/settings';
 import { chunkBySentences } from '$lib/text-chunker';
 
 export type PlayerStatus = 'idle' | 'playing' | 'paused';
@@ -24,8 +25,44 @@ export const playerState = writable<PlayerState>({ ...initial });
 let abortCtrl: AbortController | null = null;
 let onFinishedCb: (() => void) | null = null;
 
-async function runLoop(startIdx: number) {
+function isAbort(err: unknown): boolean {
+  return (err as DOMException)?.name === 'AbortError';
+}
+
+/**
+ * Speak one chunk with engine selection + first-class fallback.
+ * If the active engine is KittenTTS and it throws a non-abort error
+ * (network hiccup, inference NaN, etc.), we mark Kitten broken for
+ * the remainder of the session and retry the same chunk with Web
+ * Speech so the listener experience doesn't drop.
+ */
+async function speakChunk(
+  text: string,
+  rate: number,
+  signal: AbortSignal,
+): Promise<void> {
   const engine = getTTSEngine();
+  const voiceId =
+    engine.name === 'kitten'
+      ? get(settings).voiceId
+      : get(playerState).voiceId;
+
+  try {
+    await engine.speak(text, { rate, voiceId, signal });
+  } catch (err) {
+    if (isAbort(err)) throw err;
+    if (engine.name === 'kitten') {
+      markKittenBroken((err as Error).message ?? String(err));
+      // Retry the same chunk with Web Speech; no recursive fallback —
+      // if Web Speech also fails, that error propagates out.
+      await getWebSpeechEngine().speak(text, { rate, signal });
+      return;
+    }
+    throw err;
+  }
+}
+
+async function runLoop(startIdx: number) {
   abortCtrl?.abort();
   abortCtrl = new AbortController();
   const signal = abortCtrl.signal;
@@ -36,16 +73,14 @@ async function runLoop(startIdx: number) {
     for (let i = startIdx; i < get(playerState).chunks.length; i++) {
       if (signal.aborted) return;
       playerState.update((s) => ({ ...s, currentChunk: i }));
-      const { chunks, rate, voiceId } = get(playerState);
-      await engine.speak(chunks[i], { rate, voiceId, signal });
+      const { chunks, rate } = get(playerState);
+      await speakChunk(chunks[i], rate, signal);
     }
-    // Reached the end naturally. Fire the hook before resetting state so
-    // the callback can call startPlaying() for the next chapter without racing.
     const cb = onFinishedCb;
     playerState.update((s) => ({ ...s, status: 'idle' }));
     cb?.();
   } catch (err) {
-    if ((err as DOMException)?.name !== 'AbortError') {
+    if (!isAbort(err)) {
       console.error('TTS error:', err);
       playerState.update((s) => ({ ...s, status: 'idle' }));
     }

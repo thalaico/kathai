@@ -13,6 +13,9 @@
   import { playerState, startPlaying, stopPlaying } from '$stores/player';
   import { navigateToChapter, navigateToShelf } from '$lib/router';
   import Player from './Player.svelte';
+  import Settings from './Settings.svelte';
+
+  let settingsOpen = $state(false);
 
   // ─────────────────────────────────────────────────────────────
   // Chapter resolution (with runtime re-split for old cached books)
@@ -253,10 +256,17 @@
           <p class="author">{book.author}</p>
         {/if}
       </div>
-      <button class="listen" onclick={listen}>
-        {$playerState.chunks.length > 0 ? '■' : '♪'}
-      </button>
+      <div class="right-controls">
+        <button class="listen" onclick={listen}>
+          {$playerState.chunks.length > 0 ? '■' : '♪'}
+        </button>
+        <button class="gear" onclick={() => (settingsOpen = true)} aria-label="settings">
+          ⚙
+        </button>
+      </div>
     </header>
+
+    <Settings open={settingsOpen} onclose={() => (settingsOpen = false)} />
 
     <hr class="rule" />
 
@@ -339,13 +349,17 @@
   }
   .back:hover { color: var(--ink-soft); }
 
-  .listen {
+  .right-controls {
     position: absolute;
     right: 0;
     top: 0;
-    padding: 0.25rem 0.5rem;
+    display: flex;
+    gap: 0.2rem;
+  }
+  .listen, .gear {
+    padding: 0.25rem 0.4rem;
     color: var(--ink-faint);
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     min-height: 44px;
     min-width: 44px;
     background: transparent;
@@ -353,7 +367,7 @@
     cursor: pointer;
     font-family: inherit;
   }
-  .listen:hover { color: var(--ink); }
+  .listen:hover, .gear:hover { color: var(--ink); }
 
   .title-block { padding: 0.25rem 3rem; }
 

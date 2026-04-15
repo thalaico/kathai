@@ -136,9 +136,55 @@ export class WebSpeechEngine implements TTSEngine {
   }
 }
 
-let _engine: TTSEngine | null = null;
+import { get } from 'svelte/store';
+import { KittenEngine } from './tts-kitten';
+import { settings } from '$stores/settings';
 
+let _webSpeech: WebSpeechEngine | null = null;
+let _kitten: KittenEngine | null = null;
+/**
+ * Sticky flag flipped if KittenTTS ever throws a non-abort error during
+ * synthesis. Prevents us from retrying a broken engine forever; the user
+ * can reset it by choosing a different engine in Settings.
+ */
+let _kittenBroken = false;
+
+export function getWebSpeechEngine(): WebSpeechEngine {
+  if (!_webSpeech) _webSpeech = new WebSpeechEngine();
+  return _webSpeech;
+}
+
+/**
+ * Returns the KittenTTS engine singleton. Does NOT auto-load the model —
+ * callers are responsible for .load() when the user opts in via Settings.
+ * The heavy inference code lives in the worker file and only gets fetched
+ * when KittenEngine.load() actually constructs the Worker.
+ */
+export function getKittenEngine(): KittenEngine {
+  if (!_kitten) _kitten = new KittenEngine();
+  return _kitten;
+}
+
+/** Mark KittenTTS as broken for the rest of this session. */
+export function markKittenBroken(reason?: string): void {
+  _kittenBroken = true;
+  if (reason) console.warn('[kathai] KittenTTS disabled for session:', reason);
+}
+
+export function isKittenBroken(): boolean {
+  return _kittenBroken;
+}
+
+/**
+ * The active engine. Honors the user's setting, but falls back to Web
+ * Speech when:
+ *   - the user hasn't opted into Kitten
+ *   - Kitten hasn't finished loading yet
+ *   - Kitten threw a non-abort error earlier this session
+ */
 export function getTTSEngine(): TTSEngine {
-  if (!_engine) _engine = new WebSpeechEngine();
-  return _engine;
+  if (_kittenBroken) return getWebSpeechEngine();
+  const cfg = get(settings);
+  if (cfg.engine === 'kitten' && _kitten && _kitten.isAvailable()) return _kitten;
+  return getWebSpeechEngine();
 }
