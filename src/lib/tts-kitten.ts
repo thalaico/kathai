@@ -63,6 +63,16 @@ export class KittenEngine implements TTSEngine {
   }
 
   /**
+   * Called by the player when a synth throws. Records the error so the
+   * next time the user opens Settings they see what went wrong and can
+   * retry. isAvailable() returns false after this until a successful
+   * load() completes.
+   */
+  markFailed(reason: string) {
+    this.emit({ type: 'error', error: reason });
+  }
+
+  /**
    * Start loading the model. If a load is already in progress or succeeded,
    * returns the existing promise. After a failed load, a fresh call will
    * tear down the old worker and retry cleanly.
@@ -98,19 +108,25 @@ export class KittenEngine implements TTSEngine {
         return;
       }
 
-      this.worker.addEventListener('message', (e: MessageEvent<WorkerMsg>) => {
+      // Load-phase message router. Once we hit 'ready' or 'error', this
+      // listener detaches so it doesn't intercept later synthesis-time
+      // status/error messages (which belong to speak()'s per-call listener).
+      const onLoadMsg = (e: MessageEvent<WorkerMsg>) => {
         const msg = e.data;
         if (msg.type === 'status') {
           this.emit({ type: 'loading', message: msg.message });
         } else if (msg.type === 'ready') {
           this.voicesList = msg.voices;
           this.emit({ type: 'ready' });
+          this.worker?.removeEventListener('message', onLoadMsg);
           resolve();
         } else if (msg.type === 'error') {
           this.emit({ type: 'error', error: msg.error });
+          this.worker?.removeEventListener('message', onLoadMsg);
           reject(new Error(msg.error));
         }
-      });
+      };
+      this.worker.addEventListener('message', onLoadMsg);
 
       this.worker.postMessage({ action: 'load', repoId: KITTEN_REPO });
     });

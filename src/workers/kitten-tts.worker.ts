@@ -458,7 +458,12 @@ self.addEventListener('message', async (e: MessageEvent) => {
       await synthesize(data.text, data.voice, data.speed);
     }
   } catch (err) {
-    postMessage({ type: 'error', error: (err as Error).message ?? String(err) });
+    const e = err as Error;
+    // Log to the worker console so it's visible in devtools, then post
+    // a formatted error with stack to the main thread.
+    console.error('[kathai-tts-worker]', e);
+    const detail = `${e.message ?? String(e)}${e.stack ? '\n' + e.stack : ''}`;
+    postMessage({ type: 'error', error: detail });
   }
 });
 

@@ -169,6 +169,7 @@ export function getKittenEngine(): KittenEngine {
 export function markKittenBroken(reason?: string): void {
   _kittenBroken = true;
   if (reason) console.warn('[kathai] KittenTTS disabled for session:', reason);
+  if (_kitten && reason) _kitten.markFailed(reason);
 }
 
 export function isKittenBroken(): boolean {

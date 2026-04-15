@@ -88,35 +88,37 @@
           {/if}
         </p>
 
-        {#if $settings.engine === 'web-speech'}
-          {#if status.type === 'loading'}
-            <p class="status">{status.message}</p>
-          {:else if status.type === 'error'}
-            <p class="error">couldn't load kittentts: {status.error}</p>
-            <button class="primary" onclick={enableKitten}>try again</button>
-          {:else}
-            <button class="primary" onclick={enableKitten}>
-              download kittentts (~23 MB)
-            </button>
-          {/if}
-        {:else}
-          {#if status.type === 'loading'}
-            <p class="status">{status.message}</p>
-          {:else if status.type === 'ready' && voices.length > 0}
-            <label class="field">
-              <span>voice</span>
-              <select
-                value={$settings.voiceId ?? voices[0]}
-                onchange={(e) => pickVoice((e.target as HTMLSelectElement).value)}
-              >
-                {#each voices as v}
-                  <option value={v}>{v}</option>
-                {/each}
-              </select>
-            </label>
-          {/if}
+        {#if status.type === 'error'}
+          <p class="error">kittentts error:</p>
+          <pre class="error-detail">{status.error}</pre>
+          <button class="primary" onclick={enableKitten}>try again</button>
           <button class="secondary" onclick={disableKitten}>
             use device voice instead
+          </button>
+        {:else if status.type === 'loading'}
+          <p class="status">{status.message}</p>
+        {:else if $settings.engine === 'web-speech'}
+          <button class="primary" onclick={enableKitten}>
+            download kittentts (~23 MB)
+          </button>
+        {:else if status.type === 'ready' && voices.length > 0}
+          <label class="field">
+            <span>voice</span>
+            <select
+              value={$settings.voiceId ?? voices[0]}
+              onchange={(e) => pickVoice((e.target as HTMLSelectElement).value)}
+            >
+              {#each voices as v}
+                <option value={v}>{v}</option>
+              {/each}
+            </select>
+          </label>
+          <button class="secondary" onclick={disableKitten}>
+            use device voice instead
+          </button>
+        {:else}
+          <button class="primary" onclick={enableKitten}>
+            download kittentts (~23 MB)
           </button>
         {/if}
       </section>
@@ -220,6 +222,21 @@
   .error {
     color: var(--accent);
     font-style: italic;
+  }
+
+  .error-detail {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    background: var(--paper-edge);
+    border: 1px solid var(--rule);
+    padding: 0.6rem 0.75rem;
+    margin: 0.5rem 0 0.75rem;
+    border-radius: 2px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 14rem;
+    overflow-y: auto;
+    color: var(--ink-soft);
   }
 
   .status {
