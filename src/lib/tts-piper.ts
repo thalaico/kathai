@@ -10,7 +10,7 @@
  * plus the same streaming-chunk playback we already use for Kitten.
  */
 
-import { TtsSession, download } from '@mintplex-labs/piper-tts-web';
+import { TtsSession, download, remove } from '@mintplex-labs/piper-tts-web';
 import type { TTSEngine, TTSVoice, SpeakOptions } from './tts';
 
 export const PIPER_DEFAULT_VOICE = 'en_US-hfc_female-medium';
@@ -124,10 +124,34 @@ export class PiperEngine implements TTSEngine {
           }
         });
         this.emit({ type: 'loading', message: 'Initializing session…' });
-        this.session = await TtsSession.create({
-          voiceId,
-          wasmPaths: PIPER_WASM_PATHS,
-        });
+        try {
+          this.session = await TtsSession.create({
+            voiceId,
+            wasmPaths: PIPER_WASM_PATHS,
+          });
+        } catch (sessionErr) {
+          // "No graph was found in the protobuf" means the cached .onnx
+          // in OPFS is corrupted (interrupted download). Clear it, reset
+          // the singleton, and try once more with a fresh download.
+          console.warn('[kathai] Session creation failed, clearing cache and retrying:', sessionErr);
+          try {
+            await remove(voiceId);
+          } catch {
+            /* ignore */
+          }
+          (TtsSession as any)._instance = null;
+          this.emit({ type: 'loading', message: 'Re-downloading voice…' });
+          await download(voiceId, (progress) => {
+            if (progress.total > 0) {
+              const pct = Math.round((progress.loaded * 100) / progress.total);
+              this.emit({ type: 'loading', message: `Re-downloading… ${pct}%` });
+            }
+          });
+          this.session = await TtsSession.create({
+            voiceId,
+            wasmPaths: PIPER_WASM_PATHS,
+          });
+        }
         if (this.session.waitReady && this.session.waitReady !== true) {
           await this.session.waitReady;
         }
