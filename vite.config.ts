@@ -74,8 +74,19 @@ export default defineConfig({
     // the service worker can cache them for offline use.
     viteStaticCopy({
       targets: [
+        // The full ORT 1.20 ES-module runtime, vendored under our own
+        // origin. ort.bundle.min.mjs is the single-file entry for the
+        // WASM backend and lazily imports the simd-threaded variants
+        // via relative `./ort-wasm-simd-threaded*.{mjs,wasm}` URLs —
+        // which resolve against wherever the .mjs is served from, so
+        // they all need to sit in the same directory.
         {
-          src: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.{mjs,wasm}',
+          src: 'node_modules/onnxruntime-web/dist/ort.bundle.min.mjs',
+          dest: 'tts-runtime/onnx',
+          rename: { stripBase: true },
+        },
+        {
+          src: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded{,.jsep}.{mjs,wasm}',
           dest: 'tts-runtime/onnx',
           rename: { stripBase: true },
         },
@@ -191,6 +202,29 @@ export default defineConfig({
       $lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
       $stores: fileURLToPath(new URL('./src/stores', import.meta.url)),
       $components: fileURLToPath(new URL('./src/components', import.meta.url)),
+      // Critical: redirect the bare `onnxruntime-web` specifier that
+      // @mintplex-labs/piper-tts-web's runtime `await import(...)` uses
+      // to our vendored ES module at a fixed URL. Vite treats absolute
+      // URL aliases as external — no bundling, no asset rewriting, no
+      // hashed /assets/ paths. At runtime the browser dynamically
+      // imports the .mjs from /tts-runtime/onnx/, and all the relative
+      // `./ort-wasm-simd-threaded*.{mjs,wasm}` imports inside it
+      // resolve to sibling files in the same directory.
+      'onnxruntime-web': '/tts-runtime/onnx/ort.bundle.min.mjs',
     },
+  },
+  build: {
+    rollupOptions: {
+      // Keep the vendored /tts-runtime/onnx/ort.bundle.min.mjs path
+      // as an external runtime import instead of trying to resolve it
+      // at build time — the file only exists in the output directory
+      // after vite-plugin-static-copy runs.
+      external: [/^\/tts-runtime\/onnx\//],
+    },
+  },
+  optimizeDeps: {
+    // Don't pre-bundle ORT in dev either — it breaks the same way
+    // when esbuild touches the asset references.
+    exclude: ['onnxruntime-web'],
   },
 })
