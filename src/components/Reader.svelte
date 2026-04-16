@@ -63,7 +63,7 @@
 
   let currentChapter = $derived(effectiveChapters[$currentChapterIndex] ?? null);
   let sentences = $derived(
-    currentChapter ? chunkBySentences(currentChapter.plainText, 40) : [],
+    currentChapter ? chunkBySentences(currentChapter.plainText, 20) : [],
   );
 
   // ─────────────────────────────────────────────────────────────
@@ -248,31 +248,20 @@
   {@const book = $currentBook}
   {@const idx = $currentChapterIndex}
   <div class="reader">
-    <header>
-      <button class="back" onclick={back}>← shelf</button>
-      <div class="title-block">
-        <h1>{book.title}</h1>
-        {#if book.author}
-          <p class="author">{book.author}</p>
-        {/if}
+    <nav class="toolbar">
+      <button class="toolbar-btn" onclick={back} aria-label="back to shelf">←</button>
+      <div class="toolbar-center">
+        <span class="toolbar-title">{currentChapter?.label || `Chapter ${idx + 1}`}</span>
       </div>
-      <div class="right-controls">
-        <button class="listen" onclick={listen}>
-          {$playerState.chunks.length > 0 ? '■' : '♪'}
-        </button>
-        <button class="gear" onclick={() => (settingsOpen = true)} aria-label="settings">
-          ⚙
-        </button>
-      </div>
-    </header>
+      <button class="toolbar-btn" onclick={listen} aria-label={$playerState.chunks.length > 0 ? 'stop' : 'listen'}>
+        {$playerState.chunks.length > 0 ? '■' : '▶'}
+      </button>
+      <button class="toolbar-btn" onclick={() => (settingsOpen = true)} aria-label="settings">
+        ⚙
+      </button>
+    </nav>
 
     <Settings open={settingsOpen} onclose={() => (settingsOpen = false)} />
-
-    <hr class="rule" />
-
-    <p class="chapter-label">
-      {currentChapter?.label || `Chapter ${idx + 1}`}
-    </p>
 
     <div class="pages" bind:this={pagesContainer}>
       <article
@@ -293,23 +282,21 @@
 
     <Player />
 
-    <hr class="rule" />
-
     <footer>
-      <button class="ctrl" onclick={prevPage} disabled={currentPage === 0 && idx === 0}>
-        ← prev
+      <button class="nav-btn" onclick={prevPage} disabled={currentPage === 0 && idx === 0}>
+        ←
       </button>
       <span class="folio">
-        {currentPage + 1} / {totalPages}
+        {currentPage + 1}/{totalPages}
         <span class="sep">·</span>
-        ch. {idx + 1}/{effectiveChapters.length}
+        ch {idx + 1}/{effectiveChapters.length}
       </span>
       <button
-        class="ctrl"
+        class="nav-btn"
         onclick={nextPage}
         disabled={currentPage === totalPages - 1 && idx === effectiveChapters.length - 1}
       >
-        next →
+        →
       </button>
     </footer>
   </div>
@@ -319,100 +306,74 @@
 
 <style>
   .reader {
-    max-width: 34rem;
+    max-width: 38rem;
     margin: 0 auto;
-    padding: 2rem 1.75rem 1.5rem;
+    padding: 0;
     height: 100vh;
     display: flex;
     flex-direction: column;
     width: 100%;
   }
 
-  header {
-    position: relative;
-    text-align: center;
-  }
-
-  .back {
-    position: absolute;
-    left: 0;
-    top: 0;
-    padding: 0.25rem 0;
-    color: var(--ink-faint);
-    font-style: italic;
-    font-size: 0.9rem;
-    min-height: 44px;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    font-family: inherit;
-  }
-  .back:hover { color: var(--ink-soft); }
-
-  .right-controls {
-    position: absolute;
-    right: 0;
-    top: 0;
+  /* ─── top toolbar: back, chapter, listen, settings ─── */
+  .toolbar {
     display: flex;
-    gap: 0.2rem;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--rule);
+    background: var(--paper);
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
-  .listen, .gear {
-    padding: 0.25rem 0.4rem;
-    color: var(--ink-faint);
-    font-size: 1.05rem;
-    min-height: 44px;
-    min-width: 44px;
+
+  .toolbar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    min-width: 40px;
+    padding: 0 0.5rem;
+    color: var(--ink-soft);
     background: transparent;
     border: none;
+    border-radius: 4px;
     cursor: pointer;
     font-family: inherit;
+    font-size: 1rem;
   }
-  .listen:hover, .gear:hover { color: var(--ink); }
+  .toolbar-btn:hover { color: var(--ink); background: var(--paper-edge); }
 
-  .title-block { padding: 0.25rem 3rem; }
-
-  h1 {
-    font-size: 1.2rem;
-    font-weight: 500;
-    font-variant: small-caps;
-    letter-spacing: 0.04em;
-  }
-
-  .author {
-    margin-top: 0.15rem;
-    font-style: italic;
-    color: var(--ink-soft);
-    font-size: 0.8rem;
-  }
-
-  .rule {
-    border: none;
-    border-top: 1px solid var(--rule);
-    margin: 1rem 0;
-  }
-
-  .chapter-label {
+  .toolbar-center {
+    flex: 1;
+    min-width: 0;
     text-align: center;
-    font-style: italic;
-    color: var(--ink-soft);
-    font-size: 0.9rem;
-    margin-bottom: 1rem;
-    font-variant: small-caps;
-    letter-spacing: 0.08em;
   }
 
-  /* Fixed-height window into continuously-flowing text. Article grows
-     with its content; translateY slides it up by one page at a time. */
+  .toolbar-title {
+    font-size: 0.85rem;
+    font-variant: small-caps;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+  }
+
+  /* ─── reading surface ─── */
   .pages {
     position: relative;
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
+    padding: 1.5rem 1.75rem 0;
   }
 
   .pages article {
     font-size: 1.05rem;
-    line-height: 1.75;
+    line-height: 1.8;
     text-align: justify;
     hyphens: auto;
     transition: transform 0.28s cubic-bezier(0.3, 0.7, 0.4, 1);
@@ -420,7 +381,7 @@
   }
 
   .sentence {
-    transition: background-color 0.25s ease;
+    transition: background-color 0.2s ease;
     border-radius: 2px;
     padding: 0 1px;
   }
@@ -430,56 +391,59 @@
     box-shadow: 0 0 0 3px var(--paper-edge);
   }
 
-  /* Tap zones over the page. Left 30% = prev, right 30% = next. */
   .zone {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 30%;
+    width: 25%;
     background: transparent;
     border: none;
     cursor: pointer;
   }
   .zone.left { left: 0; }
   .zone.right { right: 0; }
-  .zone:focus-visible {
-    outline: 1px dashed var(--ink-faint);
-  }
+  .zone:focus-visible { outline: 1px dashed var(--ink-faint); }
 
+  /* ─── bottom nav ─── */
   footer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
-    padding-top: 0.25rem;
-    padding-bottom: env(safe-area-inset-bottom);
+    gap: 0.5rem;
+    padding: 0.35rem 1rem;
+    border-top: 1px solid var(--rule);
+    padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
   }
 
-  .ctrl {
+  .nav-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    min-width: 40px;
+    padding: 0 0.5rem;
     color: var(--ink-soft);
-    font-style: italic;
-    padding: 0.5rem 0;
-    min-height: 44px;
     background: transparent;
     border: none;
+    border-radius: 4px;
     cursor: pointer;
     font-family: inherit;
-    font-size: 0.95rem;
+    font-size: 1.1rem;
   }
-  .ctrl:hover:not(:disabled) { color: var(--ink); }
-  .ctrl:disabled {
+  .nav-btn:hover:not(:disabled) { color: var(--ink); background: var(--paper-edge); }
+  .nav-btn:disabled {
     color: var(--ink-faint);
-    opacity: 0.35;
+    opacity: 0.3;
     cursor: not-allowed;
   }
 
   .folio {
     color: var(--ink-faint);
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     font-variant: small-caps;
     letter-spacing: 0.1em;
   }
-  .folio .sep { margin: 0 0.35rem; }
+  .folio .sep { margin: 0 0.25rem; }
 
   .empty {
     text-align: center;

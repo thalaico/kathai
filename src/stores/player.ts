@@ -86,7 +86,7 @@ async function runLoop(startIdx: number) {
 }
 
 export function startPlaying(text: string, onFinished?: () => void) {
-  const chunks = chunkBySentences(text, 40);
+  const chunks = chunkBySentences(text, 20);
   if (chunks.length === 0) {
     onFinished?.();
     return;

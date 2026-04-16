@@ -11,7 +11,6 @@
  */
 
 import { TtsSession, download } from '@mintplex-labs/piper-tts-web';
-import { chunkBySentences } from './text-chunker';
 import type { TTSEngine, TTSVoice, SpeakOptions } from './tts';
 
 export const PIPER_DEFAULT_VOICE = 'en_US-hfc_female-medium';
@@ -146,6 +145,12 @@ export class PiperEngine implements TTSEngine {
     return this.loadedVoice;
   }
 
+  /**
+   * Speak a single piece of text (typically one sentence, as chunked by
+   * the player). No internal chunking — the player's `runLoop` handles
+   * the sentence-by-sentence iteration so the highlight index stays in
+   * sync with what's audible.
+   */
   speak(text: string, opts: SpeakOptions = {}): Promise<void> {
     if (!this.session || !this.isAvailable()) {
       return Promise.reject(new Error('Piper not loaded'));
@@ -161,7 +166,6 @@ export class PiperEngine implements TTSEngine {
 
     return new Promise<void>(async (resolve, reject) => {
       let settled = false;
-      let playChain: Promise<void> = Promise.resolve();
 
       const finish = (err?: Error) => {
         if (settled) return;
@@ -172,8 +176,6 @@ export class PiperEngine implements TTSEngine {
       };
 
       const onAbort = () => {
-        // Bump the sentinel so the synth loop short-circuits at the
-        // next boundary.
         this.currentReqId = -1;
         try {
           this.currentSource?.stop();
@@ -190,55 +192,36 @@ export class PiperEngine implements TTSEngine {
       }
       opts.signal?.addEventListener('abort', onAbort);
 
-      const chunks = chunkBySentences(text, 40);
-      if (chunks.length === 0) {
-        finish();
-        return;
-      }
-
       try {
-        for (let i = 0; i < chunks.length; i++) {
-          if (this.currentReqId !== reqId) return;
-          // Run inference — session has its own Worker, so this doesn't
-          // block the main thread.
-          const blob = await session.predict(chunks[i]);
-          if (this.currentReqId !== reqId) return;
+        if (this.currentReqId !== reqId) return;
+        const blob = await session.predict(text);
+        if (this.currentReqId !== reqId) return;
 
-          // Decode the WAV and queue playback.
-          const arrayBuf = await blob.arrayBuffer();
-          const audioBuf = await ctx.decodeAudioData(arrayBuf);
-          if (this.currentReqId !== reqId) return;
+        const arrayBuf = await blob.arrayBuffer();
+        const audioBuf = await ctx.decodeAudioData(arrayBuf);
+        if (this.currentReqId !== reqId) return;
 
-          playChain = playChain.then(
-            () =>
-              new Promise<void>((res, rej) => {
-                if (this.currentReqId !== reqId) {
-                  res();
-                  return;
-                }
-                try {
-                  const src = ctx.createBufferSource();
-                  src.buffer = audioBuf;
-                  src.playbackRate.value = playbackRate;
-                  src.connect(ctx.destination);
-                  this.currentSource = src;
-                  src.onended = () => {
-                    if (this.currentSource === src) this.currentSource = null;
-                    res();
-                  };
-                  if (ctx.state === 'suspended') {
-                    ctx.resume().then(() => src.start(), rej);
-                  } else {
-                    src.start();
-                  }
-                } catch (err) {
-                  rej(err as Error);
-                }
-              }),
-          );
-        }
-        // Wait for all queued playback to finish, then resolve.
-        await playChain;
+        await new Promise<void>((res, rej) => {
+          try {
+            const src = ctx.createBufferSource();
+            src.buffer = audioBuf;
+            src.playbackRate.value = playbackRate;
+            src.connect(ctx.destination);
+            this.currentSource = src;
+            src.onended = () => {
+              if (this.currentSource === src) this.currentSource = null;
+              res();
+            };
+            if (ctx.state === 'suspended') {
+              ctx.resume().then(() => src.start(), rej);
+            } else {
+              src.start();
+            }
+          } catch (err) {
+            rej(err as Error);
+          }
+        });
+
         if (this.currentReqId === reqId) finish();
       } catch (err) {
         if (!settled) finish(err as Error);
