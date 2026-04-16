@@ -72,7 +72,21 @@ async function runLoop(startIdx: number) {
       if (signal.aborted) return;
       playerState.update((s) => ({ ...s, currentChunk: i }));
       const { chunks, rate } = get(playerState);
-      await speakChunk(chunks[i], rate, signal);
+
+      // Start speak — the engine begins synthesizing in its worker.
+      const speakP = speakChunk(chunks[i], rate, signal);
+
+      // While the current chunk synthesizes + plays, kick off the
+      // next chunk's synthesis so it's ready by the time we need it.
+      // Piper's worker is FIFO, so the prefetch queues behind the
+      // current predict and executes during audio playback — by the
+      // time speakP resolves, the next blob is already cached.
+      const engine = getTTSEngine();
+      if ('prefetch' in engine && i + 1 < chunks.length) {
+        (engine as any).prefetch(chunks[i + 1]);
+      }
+
+      await speakP;
     }
     const cb = onFinishedCb;
     playerState.update((s) => ({ ...s, status: 'idle' }));

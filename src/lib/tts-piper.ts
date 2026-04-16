@@ -60,9 +60,10 @@ export class PiperEngine implements TTSEngine {
   private loadedVoice: string | null = null;
   private onStatus: ((s: LoadStatus) => void) | null = null;
   private nextReqId = 0;
-  /** Bumped on every new speak() / abort so in-flight predicts can check
-      whether they've been superseded between awaits. */
   private currentReqId = 0;
+  /** Pre-synthesized blob for the next sentence (see prefetch()). */
+  private prefetchedText: string | null = null;
+  private prefetchedBlob: Promise<Blob> | null = null;
 
   isAvailable(): boolean {
     return this.status.type === 'ready';
@@ -101,8 +102,13 @@ export class PiperEngine implements TTSEngine {
     }
 
     // Switching voice or retrying → discard old session.
+    // TtsSession is a hard singleton; clear it so the next `create()`
+    // actually loads the new voice's model instead of reusing the old one.
+    (TtsSession as any)._instance = null;
     this.session = null;
     this.readyPromise = null;
+    this.prefetchedText = null;
+    this.prefetchedBlob = null;
 
     this.readyPromise = (async () => {
       try {
@@ -146,10 +152,21 @@ export class PiperEngine implements TTSEngine {
   }
 
   /**
+   * Pre-synthesize the next sentence. Called by the player immediately
+   * after speak() starts so the predict runs in the worker during the
+   * current sentence's playback. If the text matches what speak() later
+   * receives, the cached blob is reused (zero wait for synthesis).
+   */
+  prefetch(text: string): void {
+    if (!this.session || !this.isAvailable()) return;
+    this.prefetchedText = text;
+    this.prefetchedBlob = this.session.predict(text);
+  }
+
+  /**
    * Speak a single piece of text (typically one sentence, as chunked by
-   * the player). No internal chunking — the player's `runLoop` handles
-   * the sentence-by-sentence iteration so the highlight index stays in
-   * sync with what's audible.
+   * the player). Uses a prefetched blob if one was prepared for this
+   * exact text; otherwise synthesizes on the spot.
    */
   speak(text: string, opts: SpeakOptions = {}): Promise<void> {
     if (!this.session || !this.isAvailable()) {
@@ -177,6 +194,8 @@ export class PiperEngine implements TTSEngine {
 
       const onAbort = () => {
         this.currentReqId = -1;
+        this.prefetchedText = null;
+        this.prefetchedBlob = null;
         try {
           this.currentSource?.stop();
         } catch {
@@ -194,7 +213,18 @@ export class PiperEngine implements TTSEngine {
 
       try {
         if (this.currentReqId !== reqId) return;
-        const blob = await session.predict(text);
+
+        // Use prefetched blob if it matches, otherwise synthesize fresh.
+        let blob: Blob;
+        if (this.prefetchedText === text && this.prefetchedBlob) {
+          blob = await this.prefetchedBlob;
+          this.prefetchedText = null;
+          this.prefetchedBlob = null;
+        } else {
+          this.prefetchedText = null;
+          this.prefetchedBlob = null;
+          blob = await session.predict(text);
+        }
         if (this.currentReqId !== reqId) return;
 
         const arrayBuf = await blob.arrayBuffer();
